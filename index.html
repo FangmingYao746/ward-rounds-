@@ -392,7 +392,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   var LS_KEY = 'wardround.v1';
   var SNAP_PREFIX = 'wardround.snap.';
   var SNAP_KEEP = 7;
-  var APP_VERSION = '1.0.0';
+  var APP_VERSION = '1.0.1';
 
   var SEXES = ['男', '女'];
   var EVENT_KINDS = ['异常检查结果', '术后检查'];
@@ -687,7 +687,8 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   function renderTodo() {
     var items = buildTodo();
     if (!inWard().length) {
-      return '<div class="empty"><span class="big">🛏️</span>还没有患者。<br>到「病区」页点右下角的「＋ 添加患者」开始。</div>';
+      return '<div class="empty"><span class="big">🛏️</span>还没有患者。<br>点下面的按钮添加第一位患者。</div>' +
+        '<button class="btn primary block addbtn" data-act="add-patient">＋ 添加患者</button>';
     }
     if (!items.length) {
       return '<div class="empty"><span class="big">✅</span>今天没有需要专门盯的患者。<br><span class="hint">（复查到期、结果待处理、术后第1/3/7/14天会自动出现在这里）</span></div>';
@@ -970,7 +971,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
             sex: v.sex, herbs: [], events: [], notes: []
           })] }).patients[0]);
           save(); toast('已添加');
-          if (state.patients.length === 1) view.tab = 'ward';
+          view.tab = 'ward';
         } else {
           Object.assign(p, {
             bed: v.bed, name: v.name, sex: v.sex, admittedAt: v.admittedAt,
@@ -1302,6 +1303,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         case 'open': view.patientId = el.dataset.id; render(); $('view').scrollTop = 0; return;
         case 'back': view.patientId = null; render(); return;
         case 'settings': renderSettingsPage(); return;
+        case 'add-patient': sheetPatient(null); return;
         case 'sheet-close': closeSheet(true); return;
         case 'sheet-save':
           if (sheetCtx && sheetCtx.onSave) {
@@ -1558,6 +1560,22 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         return (n === 2 && inWard()[0].bed === '3') || '数据组织异常';
       });
       chk('Excel 组件已内置（离线可导出）', function () { return (typeof XLSX !== 'undefined') || 'XLSX 未加载'; });
+      chk('没有"点了没反应"的按钮', function () {
+        /* 每次改界面后自动核对：页面上出现的每个按钮，都必须有对应的功能 */
+        var handled = ['tab', 'open', 'back', 'settings', 'add-patient', 'edit-patient',
+          'add-event', 'plan', 'follow', 'edit-event', 'del-event', 'del-follow',
+          'add-herb', 'del-herb', 'add-note', 'del-note', 'discharge', 'readmit', 'del-patient',
+          'sheet-close', 'sheet-save', 'export-excel', 'export-json', 'import-json',
+          'selftest', 'clear-all', 'restore-snap'];
+        var html = renderTodo() + renderWard() + renderArchive() +
+          (state.patients[0] ? renderPatient(state.patients[0]) : '') + renderSettings();
+        var re = /data-act="([^"]+)"/g, m, missing = [], seen = {};
+        while ((m = re.exec(html))) {
+          var a = m[1];
+          if (!seen[a] && handled.indexOf(a) < 0) { seen[a] = 1; missing.push(a); }
+        }
+        return missing.length === 0 || ('这些按钮没接功能：' + missing.join('、'));
+      });
     } finally {
       state = backup;
     }
