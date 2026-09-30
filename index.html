@@ -418,7 +418,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return (prefix || 'id') + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
   }
 
-  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function pad2(n) { n = parseInt(n, 10); return (n < 10 ? '0' : '') + n; }
 
   function todayStr() {
     var d = new Date();
@@ -553,6 +553,8 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         bed: p.bed || '',
         name: p.name || '',
         sex: SEXES.indexOf(p.sex) >= 0 ? p.sex : '',
+        age: p.age || '',
+        mrn: p.mrn || '',
         admittedAt: p.admittedAt || '',
         diagnosis: p.diagnosis || '',
         diagnosisAt: p.diagnosisAt || p.admittedAt || '',
@@ -720,9 +722,10 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     var list = inWard();
     if (!list.length) {
       return '<div class="empty"><span class="big">🛏️</span>病区里还没有患者。<br>点下面的按钮添加第一位患者。</div>' +
-        '<button class="btn primary block addbtn" data-act="add-patient">＋ 添加患者</button>';
+        '<button class="btn primary block addbtn" data-act="add-patient">＋ 添加患者</button>' +
+        '<button class="btn block addbtn" data-act="import-ocr" style="margin-top:8px">📷 拍照识别导入（HIS 一览）</button>';
     }
-    var h = '';
+    var h = '<button class="btn block addbtn" data-act="import-ocr" style="margin-bottom:10px">📷 拍照识别导入（HIS 一览）</button>';
     list.forEach(function (p) {
       var opens = openEvents(p);
       var meta = [];
@@ -733,7 +736,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         bedBox(p) +
         '<div class="pbody">' +
           '<div class="line1"><span class="pname">' + esc(p.name || '未命名') + '</span>' +
-            (p.sex ? '<span class="chip sm">' + esc(p.sex) + '</span>' : '') +
+            ((p.sex || p.age) ? '<span class="chip sm">' + esc(p.sex || '') + (p.age ? (p.sex ? ' ' : '') + esc(p.age) + '岁' : '') + '</span>' : '') +
             (opens.length ? '<span class="count">' + opens.length + '</span>' : '') +
           '</div>' +
           (p.diagnosis ? '<div class="pdiag">' + esc(p.diagnosis) + '</div>' : '') +
@@ -753,7 +756,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         bedBox(p) +
         '<div class="pbody">' +
           '<div class="line1"><span class="pname">' + esc(p.name || '未命名') + '</span>' +
-            (p.sex ? '<span class="chip sm">' + esc(p.sex) + '</span>' : '') + '</div>' +
+            ((p.sex || p.age) ? '<span class="chip sm">' + esc(p.sex || '') + (p.age ? (p.sex ? ' ' : '') + esc(p.age) + '岁' : '') + '</span>' : '') + '</div>' +
           (p.diagnosis ? '<div class="pdiag">' + esc(p.diagnosis) + '</div>' : '') +
           '<div class="pmeta">出院 ' + esc(fmtDT(p.dischargedAt) || '—') +
             (p.surgeryDate ? ' · 手术 ' + esc(fmtDT(p.surgeryDate)) : '') + '</div>' +
@@ -775,11 +778,12 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     h += '<div class="card"><div class="hero">' + bedBox(p, true) +
       '<div style="flex:1;min-width:0">' +
         '<div class="line1"><span class="pname">' + esc(p.name || '未命名') + '</span>' +
-        (p.sex ? '<span class="chip sm">' + esc(p.sex) + '</span>' : '') +
+        ((p.sex || p.age) ? '<span class="chip sm">' + esc(p.sex || '') + (p.age ? (p.sex ? ' ' : '') + esc(p.age) + '岁' : '') + '</span>' : '') +
         (p.status === '已出院' ? '<span class="chip sm">已出院</span>' : '') + '</div>' +
         (p.diagnosis ? '<div class="pdiag">' + esc(p.diagnosis) + '</div>' : '') +
       '</div></div>';
     h += '<div class="kv"><div class="k">入院</div><div class="v">' + esc(fmtDT(p.admittedAt) || '—') + '</div></div>';
+    if (p.mrn) h += '<div class="kv"><div class="k">住院号</div><div class="v">' + esc(p.mrn) + '</div></div>';
     h += '<div class="kv"><div class="k">诊断时间</div><div class="v">' + esc(fmtDT(p.diagnosisAt) || '—') + '</div></div>';
     h += '<div class="kv"><div class="k">手术</div><div class="v">' +
       (p.surgeryDate ? (esc(fmtDT(p.surgeryDate)) + (p.surgeryNote ? ' · ' + esc(p.surgeryNote) : '')) : '未记录') + '</div></div>';
@@ -899,6 +903,14 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     return out;
   }
 
+  function setSheetBody(html) { $('sheetBody').innerHTML = html; }
+  function setSheetTitle(t) { $('sheetTitle').textContent = t; }
+  function setSheetOkVisible(on, text) {
+    $('sheetOk').hidden = !on;
+    $('sheetOk').style.display = on ? '' : 'none';
+    if (text) $('sheetOk').textContent = text;
+  }
+
   function askConfirm(o) {
     return new Promise(function (resolve) {
       var done = false;
@@ -945,7 +957,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     var isNew = !p;
     var d = p || {
       bed: '', name: '', sex: '男', admittedAt: todayStr(), diagnosis: '',
-      diagnosisAt: todayStr(), surgeryDate: '', surgeryNote: ''
+      diagnosisAt: todayStr(), surgeryDate: '', surgeryNote: '', age: '', mrn: ''
     };
     openSheet({
       title: isNew ? '添加患者' : '修改患者信息',
@@ -956,6 +968,10 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
           '<div class="field"><label>姓名</label>' + textInput('name', d.name, '如 张三') + '</div>' +
         '</div>' +
         field('性别', selectInput('sex', d.sex || '男', SEXES)) +
+        '<div class="field2">' +
+          '<div class="field"><label>年龄</label>' + textInput('age', d.age, '如 68') + '</div>' +
+          '<div class="field"><label>住院号</label>' + textInput('mrn', d.mrn, '可留空') + '</div>' +
+        '</div>' +
         '<div class="field2">' +
           '<div class="field"><label>入院日期</label>' + textInput('admittedAt', d.admittedAt, '', 'date') + '</div>' +
           '<div class="field"><label>诊断时间</label>' + textInput('diagnosisAt', d.diagnosisAt, '', 'date') + '</div>' +
@@ -974,7 +990,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
           view.tab = 'ward';
         } else {
           Object.assign(p, {
-            bed: v.bed, name: v.name, sex: v.sex, admittedAt: v.admittedAt,
+            bed: v.bed, name: v.name, sex: v.sex, age: v.age, mrn: v.mrn, admittedAt: v.admittedAt,
             diagnosis: v.diagnosis, diagnosisAt: v.diagnosisAt,
             surgeryDate: v.surgeryDate, surgeryNote: v.surgeryNote
           });
@@ -1168,7 +1184,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   }
 
   function excelRows() {
-    var rows1 = [['床号', '姓名', '性别', '入院日期', '入院诊断', '手术', '中药开立', '未闭环', '当前重点', '今日待办']];
+    var rows1 = [['床号', '姓名', '性别', '年龄', '住院号', '入院日期', '入院诊断', '手术', '中药开立', '未闭环', '当前重点', '今日待办']];
     var todoMap = {};
     buildTodo().forEach(function (it) { todoMap[it.p.id] = it.reasons.join('；'); });
     inWard().forEach(function (p) {
@@ -1176,7 +1192,8 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       var key = opens.length ? (opens[0].content + '（' + opens[0].status +
         (opens[0].nextCheckAt ? '，计划复查' + fmtDT(opens[0].nextCheckAt) : '') + '）') : '';
       rows1.push([
-        p.bed || '', p.name || '', p.sex || '', dateOnly(p.admittedAt), p.diagnosis || '',
+        p.bed || '', p.name || '', p.sex || '', p.age || '', p.mrn || '',
+        dateOnly(p.admittedAt), p.diagnosis || '',
         (p.surgeryDate ? fmtDT(p.surgeryDate) + (p.surgeryNote ? ' ' + p.surgeryNote : '') : ''),
         (p.herbs || []).map(function (x) { return fmtDT(x.at) + ' ' + x.content; }).join('；'),
         opens.length, key, todoMap[p.id] || ''
@@ -1214,7 +1231,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     var r = excelRows();
     var wb = XLSX.utils.book_new();
     var ws1 = XLSX.utils.aoa_to_sheet(r.rows1);
-    ws1['!cols'] = [{ wch: 6 }, { wch: 8 }, { wch: 5 }, { wch: 11 }, { wch: 26 }, { wch: 26 }, { wch: 22 }, { wch: 8 }, { wch: 34 }, { wch: 20 }];
+    ws1['!cols'] = [{ wch: 6 }, { wch: 8 }, { wch: 5 }, { wch: 5 }, { wch: 13 }, { wch: 11 }, { wch: 26 }, { wch: 26 }, { wch: 22 }, { wch: 8 }, { wch: 34 }, { wch: 20 }];
     ws1['!freeze'] = { xSplit: 0, ySplit: 1 };
     XLSX.utils.book_append_sheet(wb, ws1, '交班摘要');
     var ws2 = XLSX.utils.aoa_to_sheet(r.rows2);
@@ -1304,6 +1321,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         case 'back': view.patientId = null; render(); return;
         case 'settings': renderSettingsPage(); return;
         case 'add-patient': sheetPatient(null); return;
+        case 'import-ocr': openImport(); return;
         case 'sheet-close': closeSheet(true); return;
         case 'sheet-save':
           if (sheetCtx && sheetCtx.onSave) {
@@ -1448,6 +1466,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 
   function registerSW() {
     if (location.protocol === 'file:') return;
+    if (location.search.indexOf('nosw') >= 0) return;   /* 调试用：跳过离线缓存 */
     if (!('serviceWorker' in navigator)) return;
     navigator.serviceWorker.register('./sw.js').catch(function (e) { console.warn('离线缓存注册失败', e); });
   }
@@ -1560,9 +1579,55 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         return (n === 2 && inWard()[0].bed === '3') || '数据组织异常';
       });
       chk('Excel 组件已内置（离线可导出）', function () { return (typeof XLSX !== 'undefined') || 'XLSX 未加载'; });
+      chk('识别解析：HIS 表格（清晰截图实测样本）', function () {
+        var t = 'xx市正骨医院 住院患者一览表\n' +
+          '病区: 骨科一区       2026-09-30 08:05       共5 人\n' +
+          '床号         姓名        性别 年龄          住院号              入院日期                   入院诊断\n' +
+          '12            王秀兰           女          68 2026034512           2026-09-20           右股骨颈骨折\n' +
+          '13           李建国           男         72 2026034518          2026-09-18           左股骨粗隆间骨折\n' +
+          '15           张桂英           女         81       2026034523          2026-09-24           右股骨颈骨折\n' +
+          '16             赵德海            男           65 2026034531            2026-09-22            腰椎管狭罕症\n' +
+          '18               孙丽              女           56 2026034540           2026-09-26            左膝骨关节炎';
+        return checkParsed(parseHisText(t), [
+          ['12', '王秀兰', '女', '68', '2026034512', '2026-09-20'],
+          ['13', '李建国', '男', '72', '2026034518', '2026-09-18'],
+          ['15', '张桂英', '女', '81', '2026034523', '2026-09-24'],
+          ['16', '赵德海', '男', '65', '2026034531', '2026-09-22'],
+          ['18', '孙丽', '女', '56', '2026034540', '2026-09-26']
+        ]);
+      });
+      chk('识别解析：HIS 表格（手机翻拍实测样本）', function () {
+        var t = 'xx市正骨医院 住院患者一览表\n' +
+          '病区: 骨科一区      2026-09-30 08:05      共5 人\n' +
+          '床号 姓名 性别 年龄 ”住院号            入院B期           入院诊断\n' +
+          '12        王秀兰       女      68 ”2026034512       2026-09-20       右股骨颈骨折\n' +
+          '13          李建国         男        72 ”2026034518        2026-09-18         左股骨粗隆间骨折\n' +
+          '15           张桂英          女         81       2026034523         2026-09-24          右股骨颈骨折\n' +
+          '16       赵德海       男 65 2026034531 ”2026-09-22 上脸椎管瑞罕症\n' +
+          '18         孙丽        女      56 ”2026034540      2026-09-26       左膝骨关节炎';
+        return checkParsed(parseHisText(t), [
+          ['12', '王秀兰', '女', '68', '2026034512', '2026-09-20'],
+          ['13', '李建国', '男', '72', '2026034518', '2026-09-18'],
+          ['15', '张桂英', '女', '81', '2026034523', '2026-09-24'],
+          ['16', '赵德海', '男', '65', '2026034531', '2026-09-22'],
+          ['18', '孙丽', '女', '56', '2026034540', '2026-09-26']
+        ]);
+      });
+      chk('识别解析：竖排版式与全角数字', function () {
+        var t = '床号 姓名 性别 年龄\n１２\n周国强\n男\n４５\n2026034599\n2026-09-27\n右桡骨远端骨折';
+        var rs = parseHisText(t);
+        if (rs.length !== 1) return '解析出 ' + rs.length + ' 条';
+        var r = rs[0];
+        if (r.bed !== '12' || r.name !== '周国强' || r.sex !== '男' || r.age !== '45') {
+          return '字段错误：' + [r.bed, r.name, r.sex, r.age].join('/');
+        }
+        if (r.admittedAt !== '2026-09-27') return '日期错误：' + r.admittedAt;
+        if (!r.diagnosis) return '没解析出诊断';
+        return true;
+      });
       chk('没有"点了没反应"的按钮', function () {
         /* 每次改界面后自动核对：页面上出现的每个按钮，都必须有对应的功能 */
-        var handled = ['tab', 'open', 'back', 'settings', 'add-patient', 'edit-patient',
+        var handled = ['tab', 'open', 'back', 'settings', 'add-patient', 'import-ocr', 'edit-patient',
           'add-event', 'plan', 'follow', 'edit-event', 'del-event', 'del-follow',
           'add-herb', 'del-herb', 'add-note', 'del-note', 'discharge', 'readmit', 'del-patient',
           'sheet-close', 'sheet-save', 'export-excel', 'export-json', 'import-json',
@@ -1612,13 +1677,527 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       else if (v.indexOf('p:') === 0 && getPatient(v.slice(2))) view.patientId = v.slice(2);
     }
     bind();
+    initImport();
     render();
     maybeSnapshot();
     registerSW();
+    prefetchOcr();
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
+
+    /* ============================================================
+     拍照识别导入（HIS 患者一览）
+     —— 识别全部在本机完成，照片不会上传到任何地方
+     ============================================================ */
+
+  var OCR_DIR = './ocr/';
+  var OCR_READY_KEY = 'wardround.ocrReady';
+  var ocrWorker = null;
+  var imp = null;
+
+  /* ---------------- OCR 引擎 ---------------- */
+
+  function simdSupported() {
+    try {
+      return WebAssembly.validate(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123,
+        3, 2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15, 253, 98, 11]));
+    } catch (e) { return false; }
+  }
+  function ocrCoreFile() {
+    return simdSupported() ? 'tesseract-core-simd.wasm.js' : 'tesseract-core.wasm.js';
+  }
+  function ocrAssets() {
+    return ['tesseract.min.js', 'worker.min.js', ocrCoreFile(), 'chi_sim.traineddata.gz'];
+  }
+  function ocrReady() {
+    try { return localStorage.getItem(OCR_READY_KEY) === '1'; } catch (e) { return false; }
+  }
+
+  /* 后台悄悄把识别引擎存到本机，存好后断网也能识别 */
+  function prefetchOcr() {
+    if (ocrReady() || !navigator.onLine) return;
+    var list = ocrAssets(), i = 0;
+    function next() {
+      if (i >= list.length) {
+        try { localStorage.setItem(OCR_READY_KEY, '1'); } catch (e) { }
+        return;
+      }
+      fetch(OCR_DIR + list[i++]).then(function (r) { return r.blob(); }).then(next).catch(function () { });
+    }
+    next();
+  }
+
+  function loadTesseractScript() {
+    return new Promise(function (res, rej) {
+      if (window.Tesseract) return res();
+      var s = document.createElement('script');
+      s.src = OCR_DIR + 'tesseract.min.js';
+      s.onload = function () { res(); };
+      s.onerror = function () { rej(new Error('识别引擎文件没能加载')); };
+      document.head.appendChild(s);
+    });
+  }
+
+  function ensureWorker(onProgress) {
+    if (ocrWorker) return Promise.resolve(ocrWorker);
+    return loadTesseractScript().then(function () {
+      return Tesseract.createWorker('chi_sim', 1, {
+        workerPath: OCR_DIR + 'worker.min.js',
+        corePath: OCR_DIR + ocrCoreFile(),
+        langPath: OCR_DIR.replace(/\/$/, ''),
+        logger: function (m) { if (onProgress) onProgress(m); }
+      });
+    }).then(function (w) { ocrWorker = w; return w; });
+  }
+
+  function dropWorker() {
+    if (ocrWorker) { try { ocrWorker.terminate(); } catch (e) { } ocrWorker = null; }
+  }
+
+  /* 图片预处理：缩小到合适宽度 + 灰度 + 增强对比，显著提高屏幕翻拍的识别率 */
+  function fileToCanvas(file, maxW) {
+    return new Promise(function (res, rej) {
+      var url = URL.createObjectURL(file);
+      var img = new Image();
+      img.onload = function () {
+        try {
+          var scale = Math.min(1, maxW / img.width);
+          var w = Math.max(1, Math.round(img.width * scale));
+          var h = Math.max(1, Math.round(img.height * scale));
+          var c = document.createElement('canvas');
+          c.width = w; c.height = h;
+          var ctx = c.getContext('2d');
+          ctx.drawImage(img, 0, 0, w, h);
+          var d = ctx.getImageData(0, 0, w, h);
+          var n = d.data.length / 4, g = new Uint8ClampedArray(n);
+          var min = 255, max = 0, i, j, v;
+          for (i = 0, j = 0; i < d.data.length; i += 4, j++) {
+            v = (d.data[i] * 0.299 + d.data[i + 1] * 0.587 + d.data[i + 2] * 0.114) | 0;
+            g[j] = v; if (v < min) min = v; if (v > max) max = v;
+          }
+          var range = Math.max(1, max - min);
+          for (i = 0, j = 0; i < d.data.length; i += 4, j++) {
+            v = (g[j] - min) * 255 / range;
+            v = v < 115 ? 0 : (v > 175 ? 255 : (v - 115) * 255 / 60);
+            d.data[i] = d.data[i + 1] = d.data[i + 2] = v; d.data[i + 3] = 255;
+          }
+          ctx.putImageData(d, 0, 0);
+          URL.revokeObjectURL(url);
+          res(c);
+        } catch (e) { URL.revokeObjectURL(url); rej(e); }
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); rej(new Error('这张图片打不开')); };
+      img.src = url;
+    });
+  }
+
+  function recognizeFile(file, onProgress) {
+    return fileToCanvas(file, 1700).then(function (canvas) {
+      return ensureWorker(onProgress).then(function (w) { return w.recognize(canvas); });
+    }).then(function (r) {
+      return (r && r.data && r.data.text) || '';
+    }).catch(function (e) {
+      dropWorker();                      /* 出错后重建引擎，避免卡死 */
+      throw e;
+    });
+  }
+
+  /* ---------------- 文本解析 ---------------- */
+
+  var NAME_STOP = ['床号', '床', '姓名', '性别', '年龄', '住院号', '病案号', '入院日期', '入院诊断', '诊断',
+    '病区', '科室', '医生', '主管医师', '主管', '医师', '医嘱', '护理', '护理级别', '级别', '状态', '护士',
+    '日期', '时间', '备注', '共', '人', '男', '女', '新入', '出院', '转科', '手术', '危重', '病重', '一级',
+    '二级', '三级', '特级', '普通', '医保', '自费', '床位', '患者', '总数', '一览表', '列表', '住院', '费别',
+    '病情', '责任', '主治', '主任', '医疗', '组别', '床号姓名', '总人数', '在院', '入院', '天数'];
+
+  var DISEASE_KW = ['骨折', '脱位', '坏死', '狭窄', '感染', '结石', '疝', '畸形', '结核', '骨质疏松',
+    '椎间盘', '滑脱', '囊肿', '积液', '血栓', '水肿', '衰竭', '肿瘤', '关节炎', '骨病', '腱鞘', '断裂',
+    '损伤', '劳损', '溃疡', '变性', '退变', '综合征', '病', '症', '炎', '瘤', '伤', '癌'];
+
+  function normalizeOcrText(t) {
+    return String(t || '')
+      .replace(/\r/g, '')
+      .replace(/[０-９]/g, function (c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); })
+      .replace(/[Ａ-Ｚａ-ｚ]/g, function (c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); })
+      .replace(/[\u3000\t]/g, ' ')
+      .replace(/[：]/g, ':')
+      .split('\n').map(function (l) { return l.replace(/^\s+|\s+$/g, ''); }).join('\n');
+  }
+
+  function isStop(s) { return NAME_STOP.indexOf(s) >= 0; }
+  function looksLikeName(s) { return /^[\u4e00-\u9fa5]{2,4}$/.test(s) && !isStop(s); }
+
+  /* 把文本切成一条条"患者块"：行首出现床号即视为新患者的开始 */
+  function splitBlocks(text) {
+    var lines = text.split('\n').filter(function (l) { return l.trim(); });
+    var blocks = [], cur = null, i;
+    for (i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      var m = line.match(/^(\d{1,3})\s*床?(?!\d)/);
+      var startHere = false, bed = '';
+      if (m) {
+        bed = m[1];
+        var rest = line.slice(m[0].length).replace(/^\s+/, '');
+        if (rest.length >= 2) startHere = true;
+        else if (i + 1 < lines.length && looksLikeName(lines[i + 1].replace(/\s+/g, ''))) startHere = true;
+      }
+      if (startHere) { cur = { bed: bed, text: line }; blocks.push(cur); }
+      else if (cur) { cur.text += ' ' + line; }
+    }
+    return blocks;
+  }
+
+  function parseBlock(b) {
+    var rec = {
+      bed: b.bed, name: '', sex: '', age: '', mrn: '', admittedAt: '', diagnosis: '', doubt: {}
+    };
+    var work = b.text.replace(/\s+/g, ' ');
+    var m;
+
+    m = work.match(/男|女/);
+    if (m) rec.sex = m[0];
+
+    m = work.match(/(?:^|\D)(\d{7,12})(?:\D|$)/);
+    if (m) { rec.mrn = m[1]; work = work.replace(m[1], ' '); }
+
+    m = work.match(/(20\d{2})[-\/.年](\d{1,2})[-\/.月](\d{1,2})/);
+    if (m && +m[2] >= 1 && +m[2] <= 12 && +m[3] >= 1 && +m[3] <= 31) {
+      rec.admittedAt = m[1] + '-' + pad2(m[2]) + '-' + pad2(m[3]);
+      work = work.replace(m[0], ' ');
+    } else {
+      m = work.match(/(?:^|\D)(\d{1,2})[-\/.月](\d{1,2})(?:\D|$)/);
+      if (m && +m[1] >= 1 && +m[1] <= 12 && +m[2] >= 1 && +m[2] <= 31) {
+        rec.admittedAt = new Date().getFullYear() + '-' + pad2(m[1]) + '-' + pad2(m[2]);
+        work = work.replace(m[0], ' ');
+      }
+    }
+
+    /* 去掉床号本身，避免被当成年龄 */
+    work = work.replace(new RegExp('^\\s*' + rec.bed + '\\s*床?\\s*(?!\\d)'), ' ');
+
+    m = work.match(/(\d{1,3})\s*岁/);
+    if (m) { rec.age = String(+m[1]); work = work.replace(m[0], ' '); }
+    else {
+      var cands = work.match(/(?:^|\s)(\d{1,3})(?=\s|$)/g) || [];
+      for (var k = 0; k < cands.length; k++) {
+        var v = cands[k].replace(/\s/g, '');
+        if (+v >= 1 && +v <= 120) { rec.age = String(+v); work = work.replace(new RegExp('(^|\\s)' + v + '(\\s|$)'), ' '); break; }
+      }
+    }
+
+    var segs = work.match(/[\u4e00-\u9fa5]{2,}/g) || [];
+    var i, s;
+    for (i = 0; i < segs.length; i++) {
+      s = segs[i].replace(/[男女]$/, function (c) { return segs[i].length > 3 ? '' : c; });
+      if (looksLikeName(s)) { rec.name = s; break; }
+    }
+
+    var best = '', bestScore = -1;
+    for (i = 0; i < segs.length; i++) {
+      s = segs[i];
+      if (s === rec.name || s.length < 2 || isStop(s)) continue;
+      var hits = 0;
+      for (var q = 0; q < DISEASE_KW.length; q++) if (s.indexOf(DISEASE_KW[q]) >= 0) hits++;
+      var score = hits * 100 + s.length;
+      if (hits > 0 && score > bestScore) { best = s; bestScore = score; }
+    }
+    if (!best) {
+      for (i = 0; i < segs.length; i++) {
+        s = segs[i];
+        if (s !== rec.name && s.length >= 2 && !isStop(s) && s.length > best.length) best = s;
+      }
+      if (best) rec.doubt.diagnosis = 1;
+    }
+    rec.diagnosis = best;
+
+    if (!rec.name) rec.doubt.name = 1;
+    if (!rec.diagnosis) rec.doubt.diagnosis = 1;
+    if (!rec.sex) rec.doubt.sex = 1;
+    return rec;
+  }
+
+  function parseHisText(raw) {
+    var text = normalizeOcrText(raw);
+    var blocks = splitBlocks(text);
+    var out = [], seen = {};
+    blocks.forEach(function (b) {
+      var r = parseBlock(b);
+      var key = r.bed + '|' + r.name;
+      if (seen[key]) return;
+      if (!r.bed && !r.name) return;
+      seen[key] = 1;
+      out.push(r);
+    });
+    return out;
+  }
+
+  /* 自检用：比对解析结果与期望值 */
+  function checkParsed(rs, want) {
+    if (rs.length !== want.length) return '解析出 ' + rs.length + ' 条，应为 ' + want.length + ' 条';
+    var labels = ['床号', '姓名', '性别', '年龄', '住院号', '入院日期'];
+    for (var i = 0; i < want.length; i++) {
+      var r = rs[i], w = want[i];
+      var got = [r.bed, r.name, r.sex, r.age, r.mrn, r.admittedAt];
+      for (var j = 0; j < got.length; j++) {
+        if (got[j] !== w[j]) {
+          return '第' + (i + 1) + '条' + labels[j] + '：应为「' + w[j] + '」，实际「' + got[j] + '」';
+        }
+      }
+      if (!r.diagnosis) return '第' + (i + 1) + '条没有解析出诊断';
+    }
+    return true;
+  }
+
+  /* ---------------- 导入界面 ---------------- */
+
+  function openImport() {
+    imp = { stage: 'start', records: [], busy: false, msg: '', pct: 0, text: '' };
+    openSheet({
+      title: '拍照识别导入',
+      hideOk: true,
+      body: importBody(),
+      onCancel: function () { imp = null; }
+    });
+  }
+
+  function refreshImport() {
+    if (!imp) return;
+    setSheetTitle(imp.stage === 'preview' ? '核对识别结果' : '拍照识别导入');
+    setSheetBody(importBody());
+    setSheetOkVisible(false);
+  }
+
+  function engineLine() {
+    if (ocrReady()) return '<span class="chip ok">识别引擎已就绪</span> <span class="hint">已存在本机，断网也能用</span>';
+    return '<span class="chip warn">识别引擎未下载</span> <span class="hint">连一次网会自动下载，约 7MB</span>';
+  }
+
+  function importBody() {
+    var h = '';
+    if (imp.stage === 'start') {
+      h += '<div class="hint" style="margin-bottom:10px">照片只在本机识别，不会上传。识别出来的内容<b>一定先核对再导入</b>。</div>';
+      h += '<button class="btn primary block" data-act="imp-camera">📷 拍 照</button>';
+      h += '<button class="btn block" data-act="imp-album" style="margin-top:8px">🖼️ 从相册选图（截图更准）</button>';
+      h += '<button class="btn block" data-act="imp-paste" style="margin-top:8px">⌨️ 粘贴文字（最准，推荐截图后用实况文本）</button>';
+      h += '<div style="margin-top:14px;line-height:1.7">' + engineLine() + '</div>';
+      h += '<div class="hint" style="margin-top:10px">拍照小技巧：正对屏幕、光线均匀、别开闪光灯；有截图的话用截图，识别率最高。</div>';
+      if (imp.msg) h += '<div class="hint" style="margin-top:10px;color:var(--danger)">' + esc(imp.msg) + '</div>';
+      return h;
+    }
+    if (imp.stage === 'busy') {
+      h += '<div style="padding:16px 4px">';
+      h += '<div style="font-size:15px;margin-bottom:10px">' + esc(imp.msg || '正在识别…') + '</div>';
+      h += '<div style="height:8px;border-radius:4px;background:#eef1f5;overflow:hidden">' +
+        '<div style="height:100%;width:' + Math.round((imp.pct || 0) * 100) + '%;background:var(--pri);transition:width .2s"></div></div>';
+      h += '<div class="hint" style="margin-top:10px">第一次识别需要加载引擎，稍等几秒；之后就快了。</div>';
+      h += '</div>';
+      return h;
+    }
+    if (imp.stage === 'paste') {
+      h += '<div class="hint" style="margin-bottom:8px">把 HIS 一览表上的文字粘贴到下面（截图后用「实况文本」全选复制最快最准）。</div>';
+      h += '<textarea id="impText" style="width:100%;min-height:180px;border:1px solid var(--line);border-radius:10px;padding:10px;font-size:15px;line-height:1.6" placeholder="例如：&#10;床号 姓名 性别 年龄 住院号 入院日期 入院诊断&#10;12 王秀兰 女 68 2026034512 2026-09-20 右股骨颈骨折"></textarea>';
+      h += '<div class="btnrow" style="margin-top:10px">' +
+        '<button class="btn primary" data-act="imp-parse">识别内容</button>' +
+        '<button class="btn" data-act="imp-back">返回</button></div>';
+      if (imp.msg) h += '<div class="hint" style="margin-top:10px;color:var(--danger)">' + esc(imp.msg) + '</div>';
+      return h;
+    }
+    if (imp.stage === 'preview') {
+      var sel = imp.records.filter(function (r) { return r.sel; }).length;
+      h += '<div class="hint" style="margin-bottom:8px">识别到 <b>' + imp.records.length + '</b> 位患者，已勾选 ' + sel + ' 位。核对无误后导入；带红色标记的是没认准的字段。</div>';
+      imp.records.forEach(function (r, i) {
+        h += '<div class="card" style="padding:10px">' +
+          '<div style="display:flex;gap:10px;align-items:flex-start">' +
+          '<input type="checkbox" data-act="imp-toggle" data-i="' + i + '"' + (r.sel ? ' checked' : '') +
+          ' style="width:22px;height:22px;margin-top:2px;flex:0 0 auto">' +
+          '<div style="flex:1;min-width:0">' +
+          '<div class="line1">' +
+          '<span class="pname">' + esc(r.name || '（未识别姓名）') + '</span>' +
+          '<span class="chip sm' + (r.doubt.sex ? ' danger' : '') + '">' + esc((r.sex || '?') + (r.age ? ' ' + r.age + '岁' : '')) + '</span>' +
+          (r.dup ? '<span class="chip warn">病区已有</span>' : '') +
+          '</div>' +
+          '<div class="pdiag' + (r.doubt.diagnosis ? ' danger' : '') + '" style="' + (r.doubt.diagnosis ? 'color:var(--danger)' : '') + '">' +
+          esc(r.diagnosis || '（未识别诊断）') + '</div>' +
+          '<div class="pmeta">' + esc(r.bed ? r.bed + '床' : '无床号') +
+          (r.mrn ? ' · 住院号 ' + esc(r.mrn) : '') +
+          (r.admittedAt ? ' · 入院 ' + esc(fmtDT(r.admittedAt)) : '') + '</div>' +
+          '<div style="margin-top:6px"><button class="btn sm" data-act="imp-edit" data-i="' + i + '">修改</button></div>' +
+          '</div></div></div>';
+      });
+      h += '<div class="btnrow" style="margin-top:4px">' +
+        '<button class="btn sm" data-act="imp-all">全选</button>' +
+        '<button class="btn sm" data-act="imp-none">全不选</button>' +
+        '<button class="btn sm" data-act="imp-back">重新识别</button></div>';
+      h += '<button class="btn primary block" data-act="imp-do" style="margin-top:10px">确认导入 ' + sel + ' 位患者</button>';
+      return h;
+    }
+    if (imp.stage === 'edit') {
+      var r = imp.records[imp.editIndex] || {};
+      h += '<div class="hint" style="margin-bottom:10px">改好后点「确定」，回到核对列表。</div>';
+      h += '<div class="field2">' +
+        '<div class="field"><label>床号</label>' + textInput('bed', r.bed, '如 12') + '</div>' +
+        '<div class="field"><label>姓名</label>' + textInput('name', r.name, '') + '</div></div>';
+      h += '<div class="field2">' +
+        '<div class="field"><label>性别</label>' + selectInput('sex', r.sex || '男', SEXES) + '</div>' +
+        '<div class="field"><label>年龄</label>' + textInput('age', r.age, '') + '</div></div>';
+      h += field('住院号', textInput('mrn', r.mrn, ''));
+      h += field('入院日期', textInput('admittedAt', r.admittedAt, '', 'date'));
+      h += field('入院诊断', areaInput('diagnosis', r.diagnosis, ''));
+      h += '<div class="btnrow" style="margin-top:4px">' +
+        '<button class="btn primary" data-act="imp-edit-save">确定</button>' +
+        '<button class="btn" data-act="imp-edit-cancel">返回</button></div>';
+      return h;
+    }
+    return h;
+  }
+
+  function markDup(records) {
+    var exists = {};
+    inWard().forEach(function (p) { exists[(p.bed || '') + '|' + (p.name || '')] = 1; });
+    records.forEach(function (r) {
+      r.dup = !!exists[(r.bed || '') + '|' + (r.name || '')];
+      r.sel = !r.dup;
+    });
+    return records;
+  }
+
+  function showPreview(records) {
+    imp.records = markDup(records);
+    if (!imp.records.length) {
+      imp.stage = 'start';
+      imp.msg = '没识别出患者。可以换张更清楚的照片，或者用「粘贴文字」。';
+      refreshImport();
+      return;
+    }
+    imp.stage = 'preview';
+    imp.msg = '';
+    refreshImport();
+  }
+
+  function startRecognize(file) {
+    imp.stage = 'busy';
+    imp.msg = '正在识别…';
+    imp.pct = 0.05;
+    refreshImport();
+    var names = { 'loading tesseract core': '加载识别引擎', 'initializing tesseract': '初始化引擎', 'loading language traineddata': '加载中文模型', 'initializing api': '准备中', 'recognizing text': '识别文字' };
+    recognizeFile(file, function (m) {
+      if (!imp) return;
+      imp.msg = (names[m.status] || m.status) + '…';
+      imp.pct = typeof m.progress === 'number' ? m.progress : imp.pct;
+      var bar = document.querySelector('#sheetBody div[style*="background:var(--pri)"]');
+      if (bar) bar.style.width = Math.round(imp.pct * 100) + '%';
+      var t = document.querySelector('#sheetBody div[style*="font-size:15px"]');
+      if (t) t.textContent = imp.msg;
+    }).then(function (text) {
+      if (!imp) return;
+      showPreview(parseHisText(text));
+    }).catch(function (e) {
+      if (!imp) return;
+      imp.stage = 'start';
+      imp.msg = '识别失败：' + (e && e.message ? e.message : '未知原因') +
+        (navigator.onLine ? '' : '（识别引擎还没下载，需要联网一次）');
+      refreshImport();
+    });
+  }
+
+  function pickImage(useCamera) {
+    var inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = 'image/*';
+    if (useCamera) inp.setAttribute('capture', 'environment');
+    inp.style.display = 'none';
+    document.body.appendChild(inp);
+    inp.onchange = function () {
+      var f = inp.files && inp.files[0];
+      if (inp.parentNode) inp.parentNode.removeChild(inp);
+      if (f) startRecognize(f);
+    };
+    inp.click();
+  }
+
+  function doImportSelected() {
+    var sel = imp.records.filter(function (r) { return r.sel; });
+    if (!sel.length) { toast('没有勾选任何患者'); return; }
+    sel.forEach(function (r) {
+      state.patients.push(normalize({
+        patients: [{
+          bed: r.bed, name: r.name, sex: r.sex, age: r.age, mrn: r.mrn,
+          admittedAt: r.admittedAt, diagnosis: r.diagnosis, diagnosisAt: r.admittedAt,
+          herbs: [], events: [], notes: []
+        }]
+      }).patients[0]);
+    });
+    save();
+    var n = sel.length;
+    imp = null;
+    closeSheet(false);
+    view.tab = 'ward';
+    render();
+    toast('已导入 ' + n + ' 位患者');
+  }
+
+  function initImport() {
+    document.addEventListener('click', function (ev) {
+      var el = findAction(ev.target);
+      if (!el) return;
+      var act = el.dataset.act || '';
+      if (act.indexOf('imp-') !== 0) return;
+      if (!imp) return;
+
+      if (act === 'imp-camera') { pickImage(true); return; }
+      if (act === 'imp-album') { pickImage(false); return; }
+      if (act === 'imp-paste') { imp.stage = 'paste'; imp.msg = ''; refreshImport(); return; }
+      if (act === 'imp-back') { imp.stage = 'start'; imp.msg = ''; imp.records = []; refreshImport(); return; }
+      if (act === 'imp-parse') {
+        var ta = document.getElementById('impText');
+        var text = ta ? ta.value : '';
+        if (!text.trim()) { imp.msg = '请先粘贴文字'; refreshImport(); return; }
+        showPreview(parseHisText(text));
+        return;
+      }
+      if (act === 'imp-toggle') {
+        var i = +el.dataset.i;
+        imp.records[i].sel = el.checked;
+        refreshImport();
+        return;
+      }
+      if (act === 'imp-all') { imp.records.forEach(function (r) { r.sel = true; }); refreshImport(); return; }
+      if (act === 'imp-none') { imp.records.forEach(function (r) { r.sel = false; }); refreshImport(); return; }
+      if (act === 'imp-edit') {
+        imp.editIndex = +el.dataset.i;
+        imp.stage = 'edit';
+        refreshImport();
+        return;
+      }
+      if (act === 'imp-edit-cancel') { imp.stage = 'preview'; refreshImport(); return; }
+      if (act === 'imp-edit-save') {
+        var v = sheetValues();
+        if (!String(v.name || '').trim()) { toast('请填写姓名'); return; }
+        var rr = imp.records[imp.editIndex];
+        rr.bed = v.bed; rr.name = v.name; rr.sex = v.sex; rr.age = v.age;
+        rr.mrn = v.mrn; rr.admittedAt = v.admittedAt; rr.diagnosis = v.diagnosis;
+        rr.doubt = {};
+        imp.stage = 'preview';
+        refreshImport();
+        return;
+      }
+      if (act === 'imp-do') { doImportSelected(); return; }
+    });
+  }
+
+  /* 自检用：暴露解析函数 */
+  window.__wardImport = {
+    parseHisText: parseHisText,
+    normalizeOcrText: normalizeOcrText,
+    startRecognize: startRecognize,
+    parseBlockForTest: parseBlock,
+    diag: function () {
+      return imp ? { stage: imp.stage, msg: imp.msg, pct: imp.pct, n: (imp.records || []).length } : null;
+    }
+  };
+
 
   /* 供自检/调试使用 */
   window.__ward = {
