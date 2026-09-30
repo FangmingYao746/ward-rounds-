@@ -392,7 +392,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   var LS_KEY = 'wardround.v1';
   var SNAP_PREFIX = 'wardround.snap.';
   var SNAP_KEEP = 7;
-  var APP_VERSION = '1.0.1';
+  var APP_VERSION = '1.0.2';
 
   var SEXES = ['男', '女'];
   var EVENT_KINDS = ['异常检查结果', '术后检查'];
@@ -1613,6 +1613,33 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
           ['18', '孙丽', '女', '56', '2026034540', '2026-09-26']
         ]);
       });
+      chk('识别解析：HIS 登记号锚点版式（真实系统实测样本）', function () {
+        /* 版式取自真实 HIS 一览表，姓名已替换为虚构值 */
+        var t = '床号 护士拒绝 状态 入径状态 登记号 姓名 性别 年龄 图标菜单 病区 就诊日期\n' +
+          '志者    1 02634290 张伟明 女 76% 办加 骨伤六区 2025半9\n' +
+          '03             01851152 李秀英 女 81岁 骨伤六区     205吧汪\n' +
+          '”06         入径   00142537  王建国 男 89岁  骨伤六区     202609有天\n' +
+          '，33           和径 01334769 赵丽华 女 75网 骨伤六区 | 0';
+        var rs = parseHisText(t);
+        if (rs.length !== 4) return '解析出 ' + rs.length + ' 条，应为 4 条';
+        var want = [
+          ['1', '张伟明', '女', '76', '02634290'],
+          ['03', '李秀英', '女', '81', '01851152'],
+          ['06', '王建国', '男', '89', '00142537'],
+          ['33', '赵丽华', '女', '75', '01334769']
+        ];
+        var labels = ['床号', '姓名', '性别', '年龄', '登记号'];
+        for (var i = 0; i < want.length; i++) {
+          var r = rs[i], w = want[i];
+          var got = [r.bed, r.name, r.sex, r.age, r.mrn];
+          for (var j = 0; j < got.length; j++) {
+            if (got[j] !== w[j]) {
+              return '第' + (i + 1) + '条' + labels[j] + '：应为「' + w[j] + '」，实际「' + got[j] + '」';
+            }
+          }
+        }
+        return true;
+      });
       chk('识别解析：竖排版式与全角数字', function () {
         var t = '床号 姓名 性别 年龄\n１２\n周国强\n男\n４５\n2026034599\n2026-09-27\n右桡骨远端骨折';
         var rs = parseHisText(t);
@@ -1694,8 +1721,32 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 
   var OCR_DIR = './ocr/';
   var OCR_READY_KEY = 'wardround.ocrReady';
+  var OCR_MODE_KEY = 'wardround.ocrMode';
   var ocrWorker = null;
   var imp = null;
+  var ocrProbeState = null;
+  var OCR_MODES = [['smart', '智能增强'], ['soft', '柔和(截图)'], ['raw', '原图']];
+  var ocrMode = (function () {
+    var ok = ['smart', 'soft', 'raw'];
+    try {
+      var v = localStorage.getItem(OCR_MODE_KEY);
+      return ok.indexOf(v) >= 0 ? v : 'smart';   /* 旧版本存的值自动纠正 */
+    } catch (e) { return 'smart'; }
+  })();
+  function modeName(m) {
+    for (var i = 0; i < OCR_MODES.length; i++) if (OCR_MODES[i][0] === m) return OCR_MODES[i][1];
+    return m;
+  }
+  function setOcrMode(m) {
+    ocrMode = m;
+    try { localStorage.setItem(OCR_MODE_KEY, m); } catch (e) { }
+  }
+  function nextOcrMode() {
+    var idx = 0;
+    for (var i = 0; i < OCR_MODES.length; i++) if (OCR_MODES[i][0] === ocrMode) idx = i;
+    setOcrMode(OCR_MODES[(idx + 1) % OCR_MODES.length][0]);
+    return modeName(ocrMode);
+  }
 
   /* ---------------- OCR 引擎 ---------------- */
 
@@ -1724,9 +1775,30 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         try { localStorage.setItem(OCR_READY_KEY, '1'); } catch (e) { }
         return;
       }
-      fetch(OCR_DIR + list[i++]).then(function (r) { return r.blob(); }).then(next).catch(function () { });
+      fetch(OCR_DIR + list[i++]).then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);   /* 404 等不能算下载成功 */
+        return r.blob();
+      }).then(next).catch(function () { });
     }
     next();
+  }
+
+  /* 挨个探测引擎文件在不在，用来给出明确提示（离线时跳过） */
+  function probeOcrAssets(force) {
+    if (ocrProbeState && !force) return Promise.resolve(ocrProbeState);
+    if (!navigator.onLine) {
+      ocrProbeState = { offline: true, missing: [] };
+      return Promise.resolve(ocrProbeState);
+    }
+    var list = ocrAssets(), missing = [];
+    return Promise.all(list.map(function (n) {
+      return fetch(OCR_DIR + n, { method: 'HEAD' }).then(function (r) {
+        if (!r.ok) missing.push(n + '（' + r.status + '）');
+      }).catch(function () { missing.push(n + '（连不上）'); });
+    })).then(function () {
+      ocrProbeState = { offline: false, missing: missing };
+      return ocrProbeState;
+    });
   }
 
   function loadTesseractScript() {
@@ -1756,34 +1828,128 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     if (ocrWorker) { try { ocrWorker.terminate(); } catch (e) { } ocrWorker = null; }
   }
 
-  /* 图片预处理：缩小到合适宽度 + 灰度 + 增强对比，显著提高屏幕翻拍的识别率 */
-  function fileToCanvas(file, maxW) {
+  /* Otsu 自动阈值：把图片分成"文字"和"背景"两堆 */
+  function otsuThreshold(hist, total) {
+    var sum = 0, i;
+    for (i = 0; i < 256; i++) sum += i * hist[i];
+    var sumB = 0, wB = 0, best = -1, thr = 127;
+    for (i = 0; i < 256; i++) {
+      wB += hist[i];
+      if (!wB) continue;
+      var wF = total - wB;
+      if (!wF) break;
+      sumB += i * hist[i];
+      var mB = sumB / wB, mF = (sum - sumB) / wF;
+      var between = wB * wF * (mB - mF) * (mB - mF);
+      if (between > best) { best = between; thr = i; }
+    }
+    return thr;
+  }
+
+  /* 图片预处理
+     mode = 'smart' 智能增强：放大→中值去噪→自动判断深浅底→二值化（翻拍显示器用这种）
+     mode = 'soft'  柔和：放大→灰度拉对比，不做二值化（清晰的截图用这种）
+     mode = 'raw'   原图直出，不做任何处理
+     三种都能选，识别不理想时可以换一种重试。 */
+  /* 精确 3x3 中值滤波（经典三行取中法，比逐像素排序快很多）
+     专门用来吃掉"拍显示器"产生的网点纹，这是识别能否成功的关键一步 */
+  function median3(src, w, h) {
+    var out = new Uint8ClampedArray(src.length), t;
+    for (var y = 0; y < h; y++) {
+      var y0 = (y > 0 ? y - 1 : 0) * w, y1 = y * w, y2 = (y < h - 1 ? y + 1 : h - 1) * w;
+      for (var x = 0; x < w; x++) {
+        var x0 = x > 0 ? x - 1 : 0, x2 = x < w - 1 ? x + 1 : w - 1;
+        var p = src[y0 + x0], q = src[y0 + x], r = src[y0 + x2];
+        if (p > q) { t = p; p = q; q = t; }
+        if (q > r) { t = q; q = r; r = t; }
+        if (p > q) { t = p; p = q; q = t; }
+        var a1 = p, b1 = q, c1 = r;
+        p = src[y1 + x0]; q = src[y1 + x]; r = src[y1 + x2];
+        if (p > q) { t = p; p = q; q = t; }
+        if (q > r) { t = q; q = r; r = t; }
+        if (p > q) { t = p; p = q; q = t; }
+        var a2 = p, b2 = q, c2 = r;
+        p = src[y2 + x0]; q = src[y2 + x]; r = src[y2 + x2];
+        if (p > q) { t = p; p = q; q = t; }
+        if (q > r) { t = q; q = r; r = t; }
+        if (p > q) { t = p; p = q; q = t; }
+        var a3 = p, b3 = q, c3 = r;
+        /* 三行最小值里的最大者、中位数的中位数、三行最大值里的最小者 */
+        var mx = a1 > a2 ? (a1 > a3 ? a1 : a3) : (a2 > a3 ? a2 : a3);
+        var mn = c1 < c2 ? (c1 < c3 ? c1 : c3) : (c2 < c3 ? c2 : c3);
+        var m1 = b1, m2 = b2, m3 = b3;
+        if (m1 > m2) { t = m1; m1 = m2; m2 = t; }
+        if (m2 > m3) { t = m2; m2 = m3; m3 = t; }
+        if (m1 > m2) { t = m1; m1 = m2; m2 = t; }
+        var mid = m2;
+        if (mx > mid) { t = mx; mx = mid; mid = t; }
+        if (mid > mn) { t = mid; mid = mn; mn = t; }
+        if (mx > mid) { t = mx; mx = mid; mid = t; }
+        out[y1 + x] = mid;
+      }
+    }
+    return out;
+  }
+
+  function fileToCanvas(file, mode) {
     return new Promise(function (res, rej) {
       var url = URL.createObjectURL(file);
       var img = new Image();
       img.onload = function () {
         try {
-          var scale = Math.min(1, maxW / img.width);
-          var w = Math.max(1, Math.round(img.width * scale));
-          var h = Math.max(1, Math.round(img.height * scale));
+          var w0 = img.naturalWidth || img.width, h0 = img.naturalHeight || img.height;
+          /* 放大倍数按图片大小自适应：
+             大图（多半是拍屏幕的照片，字相对小）放大 2 倍；
+             小图（多半是截图，本身已够清晰）只放 1.5 倍——放太大反而会把笔画糊掉。 */
+          var longest = Math.max(w0, h0);
+          var base = longest >= 1200 ? 2 : 1.5;
+          var scale = mode === 'raw' ? Math.min(base, 2600 / longest) : Math.min(base, 3600 / longest);
+          if (scale < 1) scale = 1;
+          var w = Math.max(1, Math.round(w0 * scale));
+          var h = Math.max(1, Math.round(h0 * scale));
           var c = document.createElement('canvas');
           c.width = w; c.height = h;
           var ctx = c.getContext('2d');
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
           ctx.drawImage(img, 0, 0, w, h);
-          var d = ctx.getImageData(0, 0, w, h);
-          var n = d.data.length / 4, g = new Uint8ClampedArray(n);
-          var min = 255, max = 0, i, j, v;
-          for (i = 0, j = 0; i < d.data.length; i += 4, j++) {
-            v = (d.data[i] * 0.299 + d.data[i + 1] * 0.587 + d.data[i + 2] * 0.114) | 0;
-            g[j] = v; if (v < min) min = v; if (v > max) max = v;
+
+          if (mode !== 'raw') {
+            var d = ctx.getImageData(0, 0, w, h);
+            var n = w * h, g = new Uint8ClampedArray(n);
+            var hist = new Uint32Array(256), i, j, v;
+            for (i = 0, j = 0; i < d.data.length; i += 4, j++) {
+              v = (d.data[i] * 0.299 + d.data[i + 1] * 0.587 + d.data[i + 2] * 0.114) | 0;
+              g[j] = v; hist[v]++;
+            }
+            if (mode === 'smart') g = median3(g, w, h);   /* 先去网点 */
+            hist = new Uint32Array(256);
+            for (i = 0; i < n; i++) hist[g[i]]++;
+            var thr = otsuThreshold(hist, n), below = 0;
+            for (i = 0; i <= thr; i++) below += hist[i];
+            /* 文字永远是"少数像素"。暗像素占多数 = 深色底浅色字，需要反色 */
+            if (below > n - below) {
+              for (i = 0; i < n; i++) g[i] = 255 - g[i];
+              hist = new Uint32Array(256);
+              for (i = 0; i < n; i++) hist[g[i]]++;
+            }
+            if (mode === 'smart') {
+              thr = otsuThreshold(hist, n);
+              for (i = 0; i < n; i++) g[i] = g[i] > thr ? 255 : 0;
+            } else {
+              /* 柔和模式（截图用）：固定偏暗的阈值。
+                 截图里常有浅灰色表格线，用自适应阈值会把表格线也变成黑线，
+                 反而把字糊住；固定阈值只保留真正的黑字，表格线自动消失。 */
+              for (i = 0; i < n; i++) {
+                var v2 = g[i];
+                g[i] = v2 < 115 ? 0 : (v2 > 175 ? 255 : (v2 - 115) * 255 / 60);
+              }
+            }
+            for (i = 0, j = 0; i < d.data.length; i += 4, j++) {
+              d.data[i] = d.data[i + 1] = d.data[i + 2] = g[j]; d.data[i + 3] = 255;
+            }
+            ctx.putImageData(d, 0, 0);
           }
-          var range = Math.max(1, max - min);
-          for (i = 0, j = 0; i < d.data.length; i += 4, j++) {
-            v = (g[j] - min) * 255 / range;
-            v = v < 115 ? 0 : (v > 175 ? 255 : (v - 115) * 255 / 60);
-            d.data[i] = d.data[i + 1] = d.data[i + 2] = v; d.data[i + 3] = 255;
-          }
-          ctx.putImageData(d, 0, 0);
           URL.revokeObjectURL(url);
           res(c);
         } catch (e) { URL.revokeObjectURL(url); rej(e); }
@@ -1794,7 +1960,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   }
 
   function recognizeFile(file, onProgress) {
-    return fileToCanvas(file, 1700).then(function (canvas) {
+    return fileToCanvas(file, ocrMode).then(function (canvas) {
       return ensureWorker(onProgress).then(function (w) { return w.recognize(canvas); });
     }).then(function (r) {
       return (r && r.data && r.data.text) || '';
@@ -1806,11 +1972,13 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 
   /* ---------------- 文本解析 ---------------- */
 
-  var NAME_STOP = ['床号', '床', '姓名', '性别', '年龄', '住院号', '病案号', '入院日期', '入院诊断', '诊断',
+  var NAME_STOP = ['床号', '床', '姓名', '性别', '年龄', '住院号', '病案号', '登记号', '入院日期', '入院诊断', '诊断',
     '病区', '科室', '医生', '主管医师', '主管', '医师', '医嘱', '护理', '护理级别', '级别', '状态', '护士',
     '日期', '时间', '备注', '共', '人', '男', '女', '新入', '出院', '转科', '手术', '危重', '病重', '一级',
     '二级', '三级', '特级', '普通', '医保', '自费', '床位', '患者', '总数', '一览表', '列表', '住院', '费别',
-    '病情', '责任', '主治', '主任', '医疗', '组别', '床号姓名', '总人数', '在院', '入院', '天数'];
+    '病情', '责任', '主治', '主任', '医疗', '组别', '床号姓名', '总人数', '在院', '入院', '天数',
+    '图标菜单', '护士拒绝', '入径', '未入径', '入径状态', '本人病人', '本科病人', '本单元病人', '在院患者',
+    '手术患者', '危重患者', '出院患者', '病人', '就诊日期', '登记', '菜单'];
 
   var DISEASE_KW = ['骨折', '脱位', '坏死', '狭窄', '感染', '结石', '疝', '畸形', '结核', '骨质疏松',
     '椎间盘', '滑脱', '囊肿', '积液', '血栓', '水肿', '衰竭', '肿瘤', '关节炎', '骨病', '腱鞘', '断裂',
@@ -1828,20 +1996,40 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 
   function isStop(s) { return NAME_STOP.indexOf(s) >= 0; }
   function looksLikeName(s) { return /^[\u4e00-\u9fa5]{2,4}$/.test(s) && !isStop(s); }
+  /* 病区名（骨伤六区之类）不是诊断，排除掉 */
+  function looksLikeWard(s) { return /(病区|病房|区|科|室|楼|床)$/.test(s); }
 
-  /* 把文本切成一条条"患者块"：行首出现床号即视为新患者的开始 */
+  /* 这一行是否含"登记号"——HIS 一览表里它最可靠，用它认新患者 */
+  function hasMrn(line) {
+    var m = line.match(/(?:^|\D)(\d{7,12})(?:\D|$)/);
+    if (!m) return false;
+    var digitsOnly = line.replace(/[^\d]/g, '');
+    /* 整行只有一个 2026xxxx 形式的日期，不算登记号 */
+    if (digitsOnly === m[1] && /^20\d{6}$/.test(m[1])) return false;
+    return true;
+  }
+
+  /* 把文本切成一条条"患者块" */
   function splitBlocks(text) {
-    var lines = text.split('\n').filter(function (l) { return l.trim(); });
+    var lines = text.split('\n');
     var blocks = [], cur = null, i;
     for (i = 0; i < lines.length; i++) {
-      var line = lines[i];
-      var m = line.match(/^(\d{1,3})\s*床?(?!\d)/);
+      var line = (lines[i] || '').replace(/^\s+|\s+$/g, '');
+      if (!line) continue;
       var startHere = false, bed = '';
-      if (m) {
-        bed = m[1];
-        var rest = line.slice(m[0].length).replace(/^\s+/, '');
-        if (rest.length >= 2) startHere = true;
-        else if (i + 1 < lines.length && looksLikeName(lines[i + 1].replace(/\s+/g, ''))) startHere = true;
+      /* 含登记号 → 新患者。但如果当前这条还没拿到登记号，说明这是一条竖着排的记录，应归到当前这条 */
+      if (hasMrn(line)) {
+        if (!cur || hasMrn(cur.text)) startHere = true;
+      }
+      if (!startHere) {
+        /* 行首（允许前面有一两个标点）就是床号 */
+        var m = line.match(/^\s*[^\d\u4e00-\u9fa5]{0,3}(\d{1,3})\s*床?(?!\d)/);
+        if (m) {
+          bed = m[1];
+          var rest = line.slice(m[0].length).replace(/^\s+/, '');
+          if (rest.length >= 2) startHere = true;
+          else if (i + 1 < lines.length && looksLikeName((lines[i + 1] || '').replace(/\s+/g, ''))) startHere = true;
+        }
       }
       if (startHere) { cur = { bed: bed, text: line }; blocks.push(cur); }
       else if (cur) { cur.text += ' ' + line; }
@@ -1853,68 +2041,90 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     var rec = {
       bed: b.bed, name: '', sex: '', age: '', mrn: '', admittedAt: '', diagnosis: '', doubt: {}
     };
-    var work = b.text.replace(/\s+/g, ' ');
-    var m;
+    var work = b.text.replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
+    var m, mrnIdx = -1, sexIdx = -1;
 
-    m = work.match(/男|女/);
-    if (m) rec.sex = m[0];
-
+    /* 1) 登记号：第一个 7~12 位数字（这一列识别最准，用它当锚点） */
     m = work.match(/(?:^|\D)(\d{7,12})(?:\D|$)/);
-    if (m) { rec.mrn = m[1]; work = work.replace(m[1], ' '); }
+    if (m) { rec.mrn = m[1]; mrnIdx = work.indexOf(m[1]); }
 
+    /* 2) 性别：优先取登记号之后的第一个"男/女" */
+    var tailStart = mrnIdx >= 0 ? mrnIdx + rec.mrn.length : 0;
+    m = work.slice(tailStart).match(/男|女/);
+    if (m) { rec.sex = m[0]; sexIdx = tailStart + m.index; }
+    else { m = work.match(/男|女/); if (m) { rec.sex = m[0]; sexIdx = m.index; } }
+
+    /* 3) 姓名：姓名永远紧挨着性别列。
+          版式A：登记号→姓名→性别（多数 HIS），姓名夹在两者之间；
+          版式B：床号→姓名→性别→…→登记号，姓名在性别前面。 */
+    if (mrnIdx >= 0 && sexIdx > mrnIdx) {
+      var between = work.slice(mrnIdx + rec.mrn.length, sexIdx).replace(/[^\u4e00-\u9fa5]/g, '');
+      if (between.length >= 2 && between.length <= 4 && !isStop(between)) rec.name = between;
+      else if (between.length >= 5) rec.name = between.slice(0, 3);
+    } else if (sexIdx >= 0) {
+      var beforeSex = work.slice(0, sexIdx).replace(/[^\u4e00-\u9fa5]/g, '');
+      var cand = beforeSex.length <= 4 ? beforeSex : beforeSex.slice(-4);
+      if (/^[\u4e00-\u9fa5]{2,4}$/.test(cand) && !isStop(cand)) rec.name = cand;
+    }
+
+    /* 4) 床号：登记号之前的第一个 1~3 位数字 */
+    var before = mrnIdx > 0 ? work.slice(0, mrnIdx) : work;
+    m = before.match(/(?:^|[^\d])(\d{1,3})(?!\d)/);
+    if (m) rec.bed = m[1];
+
+    /* 5) 就诊/入院日期（只认严格格式，认不准宁可不填） */
     m = work.match(/(20\d{2})[-\/.年](\d{1,2})[-\/.月](\d{1,2})/);
     if (m && +m[2] >= 1 && +m[2] <= 12 && +m[3] >= 1 && +m[3] <= 31) {
       rec.admittedAt = m[1] + '-' + pad2(m[2]) + '-' + pad2(m[3]);
-      work = work.replace(m[0], ' ');
-    } else {
-      m = work.match(/(?:^|\D)(\d{1,2})[-\/.月](\d{1,2})(?:\D|$)/);
-      if (m && +m[1] >= 1 && +m[1] <= 12 && +m[2] >= 1 && +m[2] <= 31) {
-        rec.admittedAt = new Date().getFullYear() + '-' + pad2(m[1]) + '-' + pad2(m[2]);
-        work = work.replace(m[0], ' ');
-      }
     }
 
-    /* 去掉床号本身，避免被当成年龄 */
-    work = work.replace(new RegExp('^\\s*' + rec.bed + '\\s*床?\\s*(?!\\d)'), ' ');
-
-    m = work.match(/(\d{1,3})\s*岁/);
-    if (m) { rec.age = String(+m[1]); work = work.replace(m[0], ' '); }
+    /* 6) 年龄：把登记号、日期、床号、姓名拿掉后，剩下的 1~3 位数字 */
+    var rest = work;
+    if (rec.mrn) rest = rest.replace(rec.mrn, ' ');
+    if (rec.admittedAt) rest = rest.replace(/\d{4}[-\/.]\d{1,2}[-\/.]\d{1,2}/, ' ');
+    /* 把床号本身从余下文字里拿掉，否则它会被当成年龄（1床就会变成"1岁"） */
+    if (rec.bed) {
+      var bedRe = new RegExp('(^|[^\\d])' + rec.bed.replace(/([.*+?^${}()|[\]\\])/g, '\\$1') + '(?![\\d])');
+      rest = rest.replace(bedRe, ' ');
+    }
+    if (rec.name) rest = rest.replace(rec.name, ' ');
+    m = rest.match(/(\d{1,3})\s*岁/);
+    if (m) rec.age = String(+m[1]);
     else {
-      var cands = work.match(/(?:^|\s)(\d{1,3})(?=\s|$)/g) || [];
+      var cands = rest.match(/(?:^|[^\d])(\d{1,3})(?!\d)/g) || [];
       for (var k = 0; k < cands.length; k++) {
-        var v = cands[k].replace(/\s/g, '');
-        if (+v >= 1 && +v <= 120) { rec.age = String(+v); work = work.replace(new RegExp('(^|\\s)' + v + '(\\s|$)'), ' '); break; }
+        var v = cands[k].replace(/[^\d]/g, '');
+        if (+v >= 1 && +v <= 120) { rec.age = String(+v); break; }
       }
     }
 
-    var segs = work.match(/[\u4e00-\u9fa5]{2,}/g) || [];
-    var i, s;
-    for (i = 0; i < segs.length; i++) {
-      s = segs[i].replace(/[男女]$/, function (c) { return segs[i].length > 3 ? '' : c; });
-      if (looksLikeName(s)) { rec.name = s; break; }
+    /* 7) 姓名兜底：登记号之后第一个像姓名的中文段 */
+    if (!rec.name) {
+      var scope = mrnIdx >= 0 ? work.slice(mrnIdx + rec.mrn.length) : work;
+      var segs0 = scope.match(/[\u4e00-\u9fa5]{2,}/g) || [];
+      for (var k2 = 0; k2 < segs0.length; k2++) {
+        var s0 = segs0[k2].replace(/[男女]$/, function (c) { return s0.length > 3 ? '' : c; });
+        if (looksLikeName(s0)) { rec.name = s0; break; }
+      }
     }
 
+    /* 8) 诊断：只在出现明确的疾病关键词时才认，认不出就留空，绝不瞎猜 */
+    var segs = work.match(/[\u4e00-\u9fa5]{2,}/g) || [];
     var best = '', bestScore = -1;
-    for (i = 0; i < segs.length; i++) {
-      s = segs[i];
-      if (s === rec.name || s.length < 2 || isStop(s)) continue;
+    for (var i = 0; i < segs.length; i++) {
+      var s = segs[i];
+      if (s === rec.name || s.length < 2 || isStop(s) || looksLikeWard(s)) continue;
       var hits = 0;
       for (var q = 0; q < DISEASE_KW.length; q++) if (s.indexOf(DISEASE_KW[q]) >= 0) hits++;
+      if (hits === 0) continue;
       var score = hits * 100 + s.length;
-      if (hits > 0 && score > bestScore) { best = s; bestScore = score; }
-    }
-    if (!best) {
-      for (i = 0; i < segs.length; i++) {
-        s = segs[i];
-        if (s !== rec.name && s.length >= 2 && !isStop(s) && s.length > best.length) best = s;
-      }
-      if (best) rec.doubt.diagnosis = 1;
+      if (score > bestScore) { best = s; bestScore = score; }
     }
     rec.diagnosis = best;
 
     if (!rec.name) rec.doubt.name = 1;
-    if (!rec.diagnosis) rec.doubt.diagnosis = 1;
     if (!rec.sex) rec.doubt.sex = 1;
+    if (!rec.age) rec.doubt.age = 1;
     return rec;
   }
 
@@ -1960,6 +2170,8 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       body: importBody(),
       onCancel: function () { imp = null; }
     });
+    /* 打开时顺手体检一次引擎文件，有问题当场说清楚 */
+    probeOcrAssets().then(function () { if (imp) refreshImport(); });
   }
 
   function refreshImport() {
@@ -1970,6 +2182,17 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   }
 
   function engineLine() {
+    var p = ocrProbeState;
+    if (p && p.missing && p.missing.length) {
+      return '<span class="chip danger">引擎文件缺失</span> ' +
+        '<div class="hint" style="margin-top:4px;color:var(--danger)">缺少：' + esc(p.missing.join('、')) +
+        '<br>多半是 <b>ocr 文件夹没上传到 GitHub</b>。可以先用下面的「粘贴文字」方式，不受影响。</div>';
+    }
+    if (p && p.offline) {
+      return ocrReady()
+        ? '<span class="chip ok">识别引擎已就绪</span> <span class="hint">当前离线，仍可正常识别</span>'
+        : '<span class="chip warn">识别引擎未下载</span> <span class="hint">需要连一次 WiFi</span>';
+    }
     if (ocrReady()) return '<span class="chip ok">识别引擎已就绪</span> <span class="hint">已存在本机，断网也能用</span>';
     return '<span class="chip warn">识别引擎未下载</span> <span class="hint">连一次网会自动下载，约 7MB</span>';
   }
@@ -1982,6 +2205,11 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       h += '<button class="btn block" data-act="imp-album" style="margin-top:8px">🖼️ 从相册选图（截图更准）</button>';
       h += '<button class="btn block" data-act="imp-paste" style="margin-top:8px">⌨️ 粘贴文字（最准，推荐截图后用实况文本）</button>';
       h += '<div style="margin-top:14px;line-height:1.7">' + engineLine() + '</div>';
+      h += '<div class="btnrow" style="margin-top:8px"><button class="btn sm" data-act="imp-check">检查引擎文件</button></div>';
+      h += '<div class="hint" style="margin-top:12px">图片处理方式（识别不理想时就换一种重试）：</div>';
+      h += '<div class="seg" style="margin-top:6px">' + OCR_MODES.map(function (m) {
+        return '<button data-act="imp-mode" data-mode="' + m[0] + '"' + (m[0] === ocrMode ? ' class="on"' : '') + '>' + m[1] + '</button>';
+      }).join('') + '</div>';
       h += '<div class="hint" style="margin-top:10px">拍照小技巧：正对屏幕、光线均匀、别开闪光灯；有截图的话用截图，识别率最高。</div>';
       if (imp.msg) h += '<div class="hint" style="margin-top:10px;color:var(--danger)">' + esc(imp.msg) + '</div>';
       return h;
@@ -2004,9 +2232,32 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       if (imp.msg) h += '<div class="hint" style="margin-top:10px;color:var(--danger)">' + esc(imp.msg) + '</div>';
       return h;
     }
+    if (imp.stage === 'empty') {
+      h += '<div class="card" style="padding:10px">' +
+        '<div style="font-weight:600;margin-bottom:6px">没能从这张图里认出患者</div>' +
+        '<div class="hint" style="line-height:1.7">可能是照片太糊、反光，或者文字版式和现在支持的几种不一样。' +
+        '先换一种图片处理方式重试；还不行就点"查看识别到的原始文字"，看看引擎到底读到了什么。</div></div>';
+      h += '<div class="hint" style="margin:6px 2px">当前处理方式：<b>' + esc(modeName(ocrMode)) + '</b></div>';
+      h += '<button class="btn primary block" data-act="imp-retry">换一种方式重试</button>';
+      h += '<button class="btn block" data-act="imp-raw" style="margin-top:8px">查看识别到的原始文字</button>';
+      h += '<button class="btn block" data-act="imp-back" style="margin-top:8px">返回</button>';
+      return h;
+    }
+    if (imp.stage === 'raw') {
+      h += '<div class="hint" style="margin-bottom:8px;line-height:1.7">下面是识别引擎读到的原始文字。<br>' +
+        '· 如果基本没有中文 → 是照片没读出来，重拍或换个处理方式；<br>' +
+        '· 如果有文字但没解析成患者 → 把这段发给我，我按你们HIS的版式调解析规则。</div>';
+      h += '<textarea id="impRaw" style="width:100%;min-height:220px;border:1px solid var(--line);border-radius:10px;padding:10px;font-size:14px;line-height:1.6">' +
+        esc(imp.raw || '（什么都没读到）') + '</textarea>';
+      h += '<div class="btnrow" style="margin-top:10px">' +
+        '<button class="btn primary" data-act="imp-copy">复制全部</button>' +
+        '<button class="btn" data-act="imp-back">返回</button></div>';
+      return h;
+    }
     if (imp.stage === 'preview') {
       var sel = imp.records.filter(function (r) { return r.sel; }).length;
-      h += '<div class="hint" style="margin-bottom:8px">识别到 <b>' + imp.records.length + '</b> 位患者，已勾选 ' + sel + ' 位。核对无误后导入；带红色标记的是没认准的字段。</div>';
+      h += '<div class="hint" style="margin-bottom:8px">用「' + esc(modeName(ocrMode)) + '」识别到 <b>' + imp.records.length +
+        '</b> 位患者，已勾选 ' + sel + ' 位。核对无误后导入；带红色标记的是没认准的字段。</div>';
       imp.records.forEach(function (r, i) {
         h += '<div class="card" style="padding:10px">' +
           '<div style="display:flex;gap:10px;align-items:flex-start">' +
@@ -2015,11 +2266,12 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
           '<div style="flex:1;min-width:0">' +
           '<div class="line1">' +
           '<span class="pname">' + esc(r.name || '（未识别姓名）') + '</span>' +
-          '<span class="chip sm' + (r.doubt.sex ? ' danger' : '') + '">' + esc((r.sex || '?') + (r.age ? ' ' + r.age + '岁' : '')) + '</span>' +
+          '<span class="chip sm' + ((r.doubt.sex || r.doubt.age) ? ' danger' : '') + '">' + esc((r.sex || '?') + (r.age ? ' ' + r.age + '岁' : '')) + '</span>' +
           (r.dup ? '<span class="chip warn">病区已有</span>' : '') +
           '</div>' +
-          '<div class="pdiag' + (r.doubt.diagnosis ? ' danger' : '') + '" style="' + (r.doubt.diagnosis ? 'color:var(--danger)' : '') + '">' +
-          esc(r.diagnosis || '（未识别诊断）') + '</div>' +
+          (r.diagnosis
+            ? '<div class="pdiag">' + esc(r.diagnosis) + '</div>'
+            : '<div class="pdiag hint">诊断：导入后补充</div>') +
           '<div class="pmeta">' + esc(r.bed ? r.bed + '床' : '无床号') +
           (r.mrn ? ' · 住院号 ' + esc(r.mrn) : '') +
           (r.admittedAt ? ' · 入院 ' + esc(fmtDT(r.admittedAt)) : '') + '</div>' +
@@ -2030,6 +2282,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         '<button class="btn sm" data-act="imp-all">全选</button>' +
         '<button class="btn sm" data-act="imp-none">全不选</button>' +
         '<button class="btn sm" data-act="imp-back">重新识别</button></div>';
+      h += '<div class="btnrow" style="margin-top:6px"><button class="btn sm" data-act="imp-raw">查看识别到的原始文字</button></div>';
       h += '<button class="btn primary block" data-act="imp-do" style="margin-top:10px">确认导入 ' + sel + ' 位患者</button>';
       return h;
     }
@@ -2076,9 +2329,11 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     refreshImport();
   }
 
-  function startRecognize(file) {
+  function startRecognize(file, tryDepth) {
+    tryDepth = tryDepth || 0;
+    if (file) imp.lastFile = file;
     imp.stage = 'busy';
-    imp.msg = '正在识别…';
+    imp.msg = tryDepth ? ('改用「' + modeName(ocrMode) + '」再试一次…') : '正在识别…';
     imp.pct = 0.05;
     refreshImport();
     var names = { 'loading tesseract core': '加载识别引擎', 'initializing tesseract': '初始化引擎', 'loading language traineddata': '加载中文模型', 'initializing api': '准备中', 'recognizing text': '识别文字' };
@@ -2092,12 +2347,45 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       if (t) t.textContent = imp.msg;
     }).then(function (text) {
       if (!imp) return;
-      showPreview(parseHisText(text));
+      imp.raw = text;
+      imp.rawAll = imp.rawAll || [];
+      imp.rawAll.push({ mode: modeName(ocrMode), text: text });
+      var recs = parseHisText(text);
+      /* 记住表现最好的那一次（按解析出的患者条数比较） */
+      if (!imp.best || recs.length > imp.best.recs.length) imp.best = { recs: recs, mode: ocrMode };
+
+      /* 文字里有多少个登记号，按理就该有多少位患者。差太多说明这次没切好，换下一种再来 */
+      var expected = (text.match(/(?:^|\D)(\d{7,12})(?=\D|$)/g) || []).length;
+      var weak = recs.length === 0 || recs.length < Math.max(2, Math.round(expected * 0.7));
+      if (weak && tryDepth < OCR_MODES.length - 1) {
+        nextOcrMode();
+        return startRecognize(imp.lastFile, tryDepth + 1);
+      }
+
+      var best = imp.best;
+      if (best && best.recs.length) {
+        setOcrMode(best.mode);
+        showPreview(best.recs);
+        return;
+      }
+      /* 三种方式都没解析出东西：把原始文字留着，让用户能发给我看 */
+      imp.stage = 'empty';
+      imp.records = [];
+      imp.msg = '';
+      refreshImport();
     }).catch(function (e) {
       if (!imp) return;
       imp.stage = 'start';
-      imp.msg = '识别失败：' + (e && e.message ? e.message : '未知原因') +
-        (navigator.onLine ? '' : '（识别引擎还没下载，需要联网一次）');
+      var msg = String((e && e.message) || '未知原因');
+      if (!navigator.onLine) {
+        imp.msg = '现在是离线状态，识别引擎还没下载好。连一次 WiFi 打开 App 让它自动下载即可；也可以先用「粘贴文字」。';
+      } else if (/没能加载|加载失败|Failed to fetch|NetworkError/i.test(msg)) {
+        imp.msg = '识别引擎文件没加载出来。最常见的原因是 ocr 文件夹没有上传到 GitHub（仓库里应该能看到一个 ocr 目录）。' +
+          '点下面的「检查引擎文件」可以看具体缺哪个；也可以先用「粘贴文字」。';
+      } else {
+        imp.msg = '识别失败：' + msg;
+      }
+      probeOcrAssets(true).then(function () { if (imp) refreshImport(); });
       refreshImport();
     });
   }
@@ -2148,8 +2436,40 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 
       if (act === 'imp-camera') { pickImage(true); return; }
       if (act === 'imp-album') { pickImage(false); return; }
+      if (act === 'imp-check') {
+        imp.msg = '正在检查引擎文件…';
+        refreshImport();
+        probeOcrAssets(true).then(function () { if (imp) { imp.msg = ''; refreshImport(); } });
+        return;
+      }
       if (act === 'imp-paste') { imp.stage = 'paste'; imp.msg = ''; refreshImport(); return; }
       if (act === 'imp-back') { imp.stage = 'start'; imp.msg = ''; imp.records = []; refreshImport(); return; }
+      if (act === 'imp-mode') {
+        setOcrMode(el.dataset.mode);
+        refreshImport();
+        return;
+      }
+      if (act === 'imp-retry') {
+        var nextName = nextOcrMode();
+        if (!imp.lastFile) { imp.stage = 'start'; imp.msg = ''; refreshImport(); return; }
+        toast('改用「' + nextName + '」重试');
+        startRecognize(imp.lastFile);
+        return;
+      }
+      if (act === 'imp-raw') { imp.stage = 'raw'; refreshImport(); return; }
+      if (act === 'imp-copy') {
+        var ta0 = document.getElementById('impRaw');
+        var txt = ta0 ? ta0.value : (imp.raw || '');
+        var done = function () { toast('已复制到剪贴板'); };
+        var fallback = function () {
+          if (ta0) { ta0.focus(); ta0.select(); }
+          try { document.execCommand('copy'); done(); } catch (e) { toast('请长按上面的文字手动复制'); }
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(txt).then(done, fallback);
+        } else fallback();
+        return;
+      }
       if (act === 'imp-parse') {
         var ta = document.getElementById('impText');
         var text = ta ? ta.value : '';
@@ -2194,8 +2514,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     startRecognize: startRecognize,
     parseBlockForTest: parseBlock,
     diag: function () {
-      return imp ? { stage: imp.stage, msg: imp.msg, pct: imp.pct, n: (imp.records || []).length } : null;
-    }
+      return imp ? { stage: imp.stage, msg: imp.msg, pct: imp.pct, n: (imp.records || []).length, raw: imp.raw || '', rawAll: imp.rawAll || [] } : null;
+    },
+    lastRecords: function () { return imp ? imp.records : null; }
   };
 
 
