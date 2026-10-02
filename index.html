@@ -392,7 +392,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   var LS_KEY = 'wardround.v1';
   var SNAP_PREFIX = 'wardround.snap.';
   var SNAP_KEEP = 7;
-  var APP_VERSION = '1.0.2';
+  var APP_VERSION = '1.0.3';
 
   var SEXES = ['男', '女'];
   var EVENT_KINDS = ['异常检查结果', '术后检查'];
@@ -1652,6 +1652,23 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         if (!r.diagnosis) return '没解析出诊断';
         return true;
       });
+      chk('识别解析：语音/手打格式（无空格、一句多人）', function () {
+        var t = '12床王秀兰女68岁右股骨颈骨折\n' +
+          '13床 李建国 男 72岁 左股骨粗隆间骨折\n' +
+          '15床张桂英女81岁右股骨颈骨折 16床赵德海男65岁腰椎管狭窄症';
+        var rs = parseHisText(t);
+        if (rs.length !== 4) return '解析出 ' + rs.length + ' 条，应为 4 条';
+        var want = [['12', '王秀兰', '女', '68'], ['13', '李建国', '男', '72'],
+                    ['15', '张桂英', '女', '81'], ['16', '赵德海', '男', '65']];
+        for (var i = 0; i < want.length; i++) {
+          var r = rs[i], w = want[i];
+          if (r.bed !== w[0] || r.name !== w[1] || r.sex !== w[2] || r.age !== w[3]) {
+            return '第' + (i + 1) + '条：' + [r.bed, r.name, r.sex, r.age].join('/') + '，应为 ' + w.join('/');
+          }
+        }
+        if (rs[0].diagnosis.indexOf('股骨颈骨折') < 0) return '第1条诊断没解析出来：' + rs[0].diagnosis;
+        return true;
+      });
       chk('没有"点了没反应"的按钮', function () {
         /* 每次改界面后自动核对：页面上出现的每个按钮，都必须有对应的功能 */
         var handled = ['tab', 'open', 'back', 'settings', 'add-patient', 'import-ocr', 'edit-patient',
@@ -2011,7 +2028,26 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 
   /* 把文本切成一条条"患者块" */
   function splitBlocks(text) {
-    var lines = text.split('\n');
+    /* 语音/手打时常常一句连说好几个患者（12床张三…13床李四…），先按"X床"切开。
+       表格识别出来的行含登记号，不动它。 */
+    var raw = text.split('\n'), lines = [];
+    raw.forEach(function (L) {
+      if (hasMrn(L)) { lines.push(L); return; }
+      /* 在"12床"这样的位置切开；注意前面必须是非数字，否则 12床 会被切成 1 和 2床 */
+      var re = /(\d{1,3})\s*床/g, cuts = [], m, k;
+      while ((m = re.exec(L)) !== null) {
+        var st = m.index;
+        if (st > 0 && /\d/.test(L.charAt(st - 1))) continue;
+        cuts.push(st);
+      }
+      if (!cuts.length) { lines.push(L); return; }
+      var from = 0;
+      for (k = 0; k < cuts.length; k++) {
+        if (cuts[k] > from) lines.push(L.slice(from, cuts[k]));
+        from = cuts[k];
+      }
+      lines.push(L.slice(from));
+    });
     var blocks = [], cur = null, i;
     for (i = 0; i < lines.length; i++) {
       var line = (lines[i] || '').replace(/^\s+|\s+$/g, '');
@@ -2064,6 +2100,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     } else if (sexIdx >= 0) {
       var beforeSex = work.slice(0, sexIdx).replace(/[^\u4e00-\u9fa5]/g, '');
       var cand = beforeSex.length <= 4 ? beforeSex : beforeSex.slice(-4);
+      cand = cand.replace(/^[床号]/, '');   /* "12床王秀兰" 里的"床"要去掉 */
       if (/^[\u4e00-\u9fa5]{2,4}$/.test(cand) && !isStop(cand)) rec.name = cand;
     }
 
@@ -2120,7 +2157,8 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       var score = hits * 100 + s.length;
       if (score > bestScore) { best = s; bestScore = score; }
     }
-    rec.diagnosis = best;
+    /* 语音/手打时诊断常和"岁""床"粘在一起，清掉这些杂字 */
+    rec.diagnosis = best.replace(/^[\d床号岁\s]+/, '').replace(/\s+/g, '');
 
     if (!rec.name) rec.doubt.name = 1;
     if (!rec.sex) rec.doubt.sex = 1;
@@ -2224,7 +2262,11 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       return h;
     }
     if (imp.stage === 'paste') {
-      h += '<div class="hint" style="margin-bottom:8px">把 HIS 一览表上的文字粘贴到下面（截图后用「实况文本」全选复制最快最准）。</div>';
+      h += '<div class="hint" style="margin-bottom:8px;line-height:1.7">把文字粘贴到下面，三种来源都行：<br>' +
+        '· <b>截图后用苹果「实况文本」</b>全选复制 → 点下面「从剪贴板粘贴」（最准）<br>' +
+        '· 点输入框，用键盘上的<b>麦克风说话</b>逐条念（最快）<br>' +
+        '· 直接手打</div>';
+      h += '<div class="btnrow" style="margin-bottom:8px"><button class="btn sm" data-act="imp-clip">从剪贴板粘贴</button></div>';
       h += '<textarea id="impText" style="width:100%;min-height:180px;border:1px solid var(--line);border-radius:10px;padding:10px;font-size:15px;line-height:1.6" placeholder="例如：&#10;床号 姓名 性别 年龄 住院号 入院日期 入院诊断&#10;12 王秀兰 女 68 2026034512 2026-09-20 右股骨颈骨折"></textarea>';
       h += '<div class="btnrow" style="margin-top:10px">' +
         '<button class="btn primary" data-act="imp-parse">识别内容</button>' +
@@ -2443,6 +2485,18 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         return;
       }
       if (act === 'imp-paste') { imp.stage = 'paste'; imp.msg = ''; refreshImport(); return; }
+      if (act === 'imp-clip') {
+        var ta1 = document.getElementById('impText');
+        var fill = function (t) {
+          if (!t || !t.trim()) { toast('剪贴板是空的'); return; }
+          if (ta1) ta1.value = t;
+          showPreview(parseHisText(t));   /* 粘完直接解析，少点一次 */
+        };
+        if (navigator.clipboard && navigator.clipboard.readText) {
+          navigator.clipboard.readText().then(fill, function () { toast('请长按输入框手动粘贴'); });
+        } else toast('请长按输入框手动粘贴');
+        return;
+      }
       if (act === 'imp-back') { imp.stage = 'start'; imp.msg = ''; imp.records = []; refreshImport(); return; }
       if (act === 'imp-mode') {
         setOcrMode(el.dataset.mode);
