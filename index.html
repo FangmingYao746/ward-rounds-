@@ -392,7 +392,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   var LS_KEY = 'wardround.v1';
   var SNAP_PREFIX = 'wardround.snap.';
   var SNAP_KEEP = 7;
-  var APP_VERSION = '1.0.5';
+  var APP_VERSION = '1.0.6';
 
   var SEXES = ['男', '女'];
   var EVENT_KINDS = ['异常检查结果', '术后检查'];
@@ -867,6 +867,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   function openSheet(o) {
     sheetCtx = {
       onSave: o.onSave || null,
+      onSaveNext: o.onSaveNext || null,
       onCancel: o.onCancel || null,
       closer: null
     };
@@ -959,6 +960,14 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       bed: '', name: '', sex: '男', admittedAt: todayStr(), diagnosis: '',
       diagnosisAt: todayStr(), surgeryDate: '', surgeryNote: '', age: '', mrn: ''
     };
+    /* 常用诊断：从已有患者里取最近用过的几个，点一下就填上，省得每次打字 */
+    var recDx = [];
+    if (isNew) {
+      state.patients.slice().reverse().forEach(function (x) {
+        var t = (x.diagnosis || '').trim();
+        if (t && t.length <= 20 && recDx.indexOf(t) < 0 && recDx.length < 5) recDx.push(t);
+      });
+    }
     openSheet({
       title: isNew ? '添加患者' : '修改患者信息',
       okText: '保存',
@@ -979,15 +988,30 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         field('入院诊断', areaInput('diagnosis', d.diagnosis, '如 右股骨颈骨折（Garden III型）')) +
         field('手术日期', textInput('surgeryDate', d.surgeryDate, '', 'date'), '非手术患者留空即可') +
         field('手术备注', textInput('surgeryNote', d.surgeryNote, '如 右股骨颈骨折闭合复位空心钉内固定', 'text')) +
+        (recDx.length ? '<div class="field"><label>常用诊断（点一下填入）</label><div class="seg">' +
+          recDx.map(function (t) { return '<button type="button" data-act="fill-diag" data-v="' + esc(t) + '">' + esc(t) + '</button>'; }).join('') +
+          '</div></div>' : '') +
+        (isNew ? '<button type="button" class="btn block addbtn" data-act="sheet-save-next" style="margin:8px 0 4px">保存，并继续添加下一位</button>' : '') +
         '<div style="height:8px"></div>',
-      onSave: function (v) {
+      onSave: function (v) { return doSave(v, false); },
+      onSaveNext: function (v) { return doSave(v, true); }
+    });
+
+    function doSave(v, andNext) {
         if (!String(v.name || '').trim()) { toast('请填写姓名'); return false; }
         if (isNew) {
           state.patients.push(normalize({ patients: [Object.assign({}, v, {
             sex: v.sex, herbs: [], events: [], notes: []
           })] }).patients[0]);
-          save(); toast('已添加');
+          save();
           view.tab = 'ward';
+          render();
+          if (andNext) {
+            /* 关掉当前表单后，立刻再开一张空白表单，方便连着录 */
+            setTimeout(function () { if (!sheetCtx) sheetPatient(null); }, 300);
+            return true;
+          }
+          toast('已添加');
         } else {
           Object.assign(p, {
             bed: v.bed, name: v.name, sex: v.sex, age: v.age, mrn: v.mrn, admittedAt: v.admittedAt,
@@ -997,8 +1021,8 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
           save(); toast('已保存');
         }
         render();
-      }
-    });
+        return true;
+    }
   }
 
   function sheetEvent(p, e) {
@@ -1353,6 +1377,18 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
           }
           closeSheet(false);
           return;
+        case 'sheet-save-next':
+          if (sheetCtx && sheetCtx.onSaveNext) {
+            var r3 = sheetCtx.onSaveNext(sheetValues());
+            if (r3 === false) return;
+          }
+          closeSheet(false);
+          return;
+        case 'fill-diag': {
+          var dxInput = document.querySelector('#sheetBody [name=diagnosis]');
+          if (dxInput) dxInput.value = el.dataset.v || '';
+          return;
+        }
       }
 
       if (!p) return;
@@ -1779,7 +1815,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
           'sheet-close', 'sheet-save', 'export-excel', 'export-json', 'import-json',
           'selftest', 'clear-all', 'restore-snap',
           'ai-mode', 'ai-url', 'ai-key', 'ai-model',
-          'engine-mode', 'paddle-url'];
+          'engine-mode', 'paddle-url', 'sheet-save-next', 'fill-diag'];
         var html = renderTodo() + renderWard() + renderArchive() +
           (state.patients[0] ? renderPatient(state.patients[0]) : '') + renderSettings();
         var re = /data-act="([^"]+)"/g, m, missing = [], seen = {};
@@ -2467,6 +2503,18 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     });
   }
 
+  /* 给任何一步加超时：卡住就当作失败，好让程序自动退回内置引擎 */
+  function withTimeout(p, ms, msg) {
+    return new Promise(function (res, rej) {
+      var done = false;
+      var t = setTimeout(function () {
+        if (!done) { done = true; rej(new Error(msg || '超时')); }
+      }, ms);
+      p.then(function (v) { if (!done) { done = true; clearTimeout(t); res(v); } },
+             function (e) { if (!done) { done = true; clearTimeout(t); rej(e); } });
+    });
+  }
+
   /* PaddleOCR 自带预处理，这里只做尺寸控制 */
   function fileToPlainCanvas(file, maxSide) {
     return new Promise(function (res, rej) {
@@ -2569,13 +2617,16 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       h += '<div style="height:8px;border-radius:4px;background:#eef1f5;overflow:hidden">' +
         '<div style="height:100%;width:' + Math.round((imp.pct || 0) * 100) + '%;background:var(--pri);transition:width .2s"></div></div>';
       h += '<div class="hint" style="margin-top:10px">第一次识别需要加载引擎，稍等几秒；之后就快了。</div>';
+      h += '<div class="hint" style="margin-top:6px">如果一直停在这里不动，点下面的「取消」即可，换「粘贴文字」方式录入。</div>';
       h += '</div>';
       return h;
     }
     if (imp.stage === 'paste') {
       h += '<div class="hint" style="margin-bottom:8px;line-height:1.7">把文字粘贴到下面，三种来源都行：<br>' +
         '· <b>截图后用苹果「实况文本」</b>全选复制 → 点下面「从剪贴板粘贴」（最准）<br>' +
-        '· 点输入框，用键盘上的<b>麦克风说话</b>逐条念（最快）<br>' +
+        '· 点输入框，用键盘上的<b>麦克风说话</b>逐条念（最快）。<b>每位都要先说床号</b>，例如：<br>' +
+        '　　"12床 王秀兰 女 68岁 右股骨颈骨折"<br>' +
+        '　　连着念也行，程序会自动按"XX床"切开<br>' +
         '· 直接手打</div>';
       h += '<div class="btnrow" style="margin-bottom:8px"><button class="btn sm" data-act="imp-clip">从剪贴板粘贴</button></div>';
       h += '<textarea id="impText" style="width:100%;min-height:180px;border:1px solid var(--line);border-radius:10px;padding:10px;font-size:15px;line-height:1.6" placeholder="例如：&#10;床号 姓名 性别 年龄 住院号 入院日期 入院诊断&#10;12 王秀兰 女 68 2026034512 2026-09-20 右股骨颈骨折"></textarea>';
@@ -2689,7 +2740,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     imp.msg = '正在让 AI 整理（' + aiHost() + '）…';
     imp.pct = 0.4;
     refreshImport();
-    return aiFixText(text).then(function (rs) {
+    return withTimeout(aiFixText(text), 90000, 'AI 服务器响应超时').then(function (rs) {
       return rs.length ? rs : parseHisText(text);
     }).catch(function (e) {
       toast('AI 整理失败，改用本机解析');
@@ -2707,7 +2758,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       imp.msg = '正在把照片发送到 ' + aiHost() + ' …';
       imp.pct = 0.3;
       refreshImport();
-      aiRecognizeImage(file).then(function (recs) {
+      withTimeout(aiRecognizeImage(file), 90000, 'AI 服务器响应超时').then(function (recs) {
         if (!imp) return;
         if (!recs.length) throw new Error('AI 没有识别出患者');
         imp.best = null;
@@ -2726,7 +2777,8 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       imp.msg = '正在用 PaddleOCR 识别…';
       imp.pct = 0.2;
       refreshImport();
-      paddleRecognize(file, function (m) { if (imp) { imp.msg = m; refreshImport(); } })
+      withTimeout(paddleRecognize(file, function (m) { if (imp) { imp.msg = m; refreshImport(); } }),
+        45000, 'PaddleOCR 超时')
         .then(function (text) {
           if (!imp) return;
           if (!text || !text.trim()) throw new Error('没有识别到文字');
@@ -2794,7 +2846,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         imp.stage = 'busy';
         imp.msg = '正在让 AI 纠错（' + aiHost() + '）…';
         refreshImport();
-        return aiFixText(text).then(function (rs) {
+        return withTimeout(aiFixText(text), 90000, 'AI 服务器响应超时').then(function (rs) {
           if (!imp) return;
           if (rs.length) { imp.best = null; showPreview(rs); return; }
           return useLocal();
