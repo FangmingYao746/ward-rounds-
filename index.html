@@ -300,6 +300,48 @@ button,input,select,textarea{font:inherit;color:inherit}
 #selftest .no{color:var(--danger);font-weight:700}
 
 /* ---------- 大字模式下的宽度 ---------- */
+/* ---------- 左滑操作 ---------- */
+.swipe-wrap{position:relative;margin-bottom:10px;border-radius:var(--radius);overflow:hidden}
+.swipe-wrap .swipe-actions{
+  position:absolute;right:0;top:0;bottom:0;display:flex;
+}
+.swipe-wrap .swipe-actions button{
+  width:76px;border:0;color:#fff;font-size:12px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+  cursor:pointer;
+}
+.swipe-wrap .swipe-actions button .si{font-size:20px;line-height:1}
+.swipe-wrap .swipe-actions .sw-voice{background:#0b6bcb}
+.swipe-wrap .swipe-actions .sw-read{background:#0f766e}
+.swipe-wrap .pcard{
+  margin-bottom:0;position:relative;z-index:1;
+  transition:transform .22s ease-out;
+  background:var(--card);
+  touch-action:pan-y;   /* 横向手势交给左滑处理，上下滑动仍是正常翻页 */
+}
+.swipe-wrap .pcard.dragging{transition:none}
+
+/* ---------- 语音快速填写 ---------- */
+.voicebox{
+  border:1px dashed var(--pri);
+  background:var(--pri-soft);
+  border-radius:12px;
+  padding:10px;
+  margin-bottom:12px;
+}
+.voicebox .vb-hd{font-size:13px;font-weight:600;color:var(--pri);margin-bottom:6px}
+.voicebox textarea{
+  width:100%;min-height:64px;border:1px solid var(--line);border-radius:10px;
+  padding:9px 10px;font-size:15px;line-height:1.6;background:#fff;
+}
+.voice-tip{font-size:12px;color:var(--sub);margin-top:6px;line-height:1.6}
+.ai-result{border:1px solid var(--line);border-radius:12px;padding:10px;background:#fff;margin-bottom:10px}
+.ai-result .row{display:flex;gap:8px;align-items:center;margin-bottom:6px}
+.ai-result .row .k{flex:0 0 52px;font-size:13px;color:var(--sub)}
+.ai-result .row select,.ai-result .row input,.ai-result .row textarea{
+  flex:1;border:1px solid var(--line);border-radius:9px;padding:9px;font-size:15px;background:#fbfcfd;min-width:0;
+}
+
 @media (min-width:700px){
   #view{max-width:720px;margin:0 auto;width:100%}
   .topbar{max-width:720px;margin:0 auto;width:100%}
@@ -392,7 +434,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   var LS_KEY = 'wardround.v1';
   var SNAP_PREFIX = 'wardround.snap.';
   var SNAP_KEEP = 7;
-  var APP_VERSION = '1.0.7';
+  var APP_VERSION = '1.1.0';
 
   var SEXES = ['男', '女'];
   var EVENT_KINDS = ['异常检查结果', '术后检查'];
@@ -483,6 +525,15 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   }
   function openEvents(p) {
     return (p.events || []).filter(isOpen).sort(cmpEventTimeDesc);
+  }
+  /* 未闭环、且还没被"标为已读"的条目——病区卡片上的红圈数字用它 */
+  function unreadEvents(p) {
+    return openEvents(p).filter(function (e) { return !e.readAt; });
+  }
+  function markPatientRead(p) {
+    var n = 0;
+    openEvents(p).forEach(function (e) { if (!e.readAt) { e.readAt = nowLocalInput(); n++; } });
+    return n;
   }
   function cmpEventTimeDesc(a, b) {
     var x = String(a.foundAt || ''), y = String(b.foundAt || '');
@@ -576,7 +627,8 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
             followups: (e.followups || []).map(function (f) {
               return { id: f.id || uid('f'), at: f.at || '', content: f.content || '' };
             }),
-            closedAt: e.closedAt || ''
+            closedAt: e.closedAt || '',
+            readAt: e.readAt || ''
           };
         }),
         notes: (p.notes || []).map(function (n) {
@@ -644,7 +696,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       var pd = null;
       if (p.surgeryDate) {
         pd = daysBetween(p.surgeryDate, today);
-        if (POSTOP_KEY_DAYS.indexOf(pd) >= 0) reasons.push('术后第' + pd + '天');
+        if (postopDays().indexOf(pd) >= 0) reasons.push('术后第' + pd + '天');
       }
 
       if (reasons.length) items.push({ p: p, reasons: reasons, details: details, postopDay: pd, opens: opens });
@@ -653,6 +705,65 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   }
 
   /* ---------------- 渲染 ---------------- */
+
+  /* ---------- 卡片左滑：露出"语音 / 已读"两个按钮 ---------- */
+  function closeAllSwipes() {
+    var opens = document.querySelectorAll('.swipe-wrap .pcard[data-open="1"]');
+    for (var i = 0; i < opens.length; i++) {
+      opens[i].dataset.open = '0';
+      opens[i].style.transform = 'translateX(0)';
+    }
+  }
+
+  function bindSwipes() {
+    var wraps = document.querySelectorAll('.swipe-wrap');
+    for (var i = 0; i < wraps.length; i++) bindSwipeOne(wraps[i]);
+  }
+
+  function bindSwipeOne(wrap) {
+    var inner = wrap.querySelector('.pcard');
+    var acts = wrap.querySelector('.swipe-actions');
+    if (!inner || !acts) return;
+    var x0 = 0, y0 = 0, dx = 0, dragging = false, decided = false, swiping = false, W = 0;
+    inner.addEventListener('touchstart', function (e) {
+      if (e.touches.length !== 1) return;
+      x0 = e.touches[0].clientX; y0 = e.touches[0].clientY;
+      dragging = true; decided = false; swiping = false; dx = 0;
+      W = acts.offsetWidth;
+      inner.classList.add('dragging');
+    }, { passive: true });
+    inner.addEventListener('touchmove', function (e) {
+      if (!dragging) return;
+      var x = e.touches[0].clientX - x0, y = e.touches[0].clientY - y0;
+      if (!decided) {
+        if (Math.abs(x) < 8 && Math.abs(y) < 8) return;
+        decided = true;
+        swiping = Math.abs(x) > Math.abs(y) * 1.2;   /* 横向幅度明显更大才算滑动，否则让页面正常上下滚 */
+        if (!swiping) { dragging = false; inner.classList.remove('dragging'); return; }
+      }
+      var base = inner.dataset.open === '1' ? -W : 0;
+      dx = Math.max(-W, Math.min(0, base + x));
+      inner.style.transform = 'translateX(' + dx + 'px)';
+      if (e.cancelable) e.preventDefault();
+    }, { passive: false });
+    var end = function () {
+      if (!dragging) return;
+      dragging = false;
+      inner.classList.remove('dragging');
+      var base = inner.dataset.open === '1' ? -W : 0;
+      var finalDx = Math.max(-W, Math.min(0, base + dx));
+      var open = finalDx < -W / 2;
+      if (open) closeAllSwipes();
+      inner.dataset.open = open ? '1' : '0';
+      inner.style.transform = open ? ('translateX(' + (-W) + 'px)') : 'translateX(0)';
+      if (swiping) {
+        inner.dataset.swiped = '1';
+        setTimeout(function () { inner.dataset.swiped = ''; }, 400);
+      }
+    };
+    inner.addEventListener('touchend', end);
+    inner.addEventListener('touchcancel', end);
+  }
 
   function render() {
     var todoN = buildTodo().length;
@@ -674,7 +785,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     });
 
     if (view.tab === 'todo') $('view').innerHTML = renderTodo();
-    else if (view.tab === 'ward') $('view').innerHTML = renderWard();
+    else if (view.tab === 'ward') { $('view').innerHTML = renderWard(); bindSwipes(); }
     else $('view').innerHTML = renderArchive();
   }
 
@@ -726,22 +837,30 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         '<button class="btn block addbtn" data-act="import-ocr" style="margin-top:8px">📷 拍照识别导入（HIS 一览）</button>';
     }
     var h = '<button class="btn block addbtn" data-act="import-ocr" style="margin-bottom:10px">📷 拍照识别导入（HIS 一览）</button>';
+    h += '<div class="hint" style="margin:-4px 2px 8px">左右滑动患者卡片可以：🎤 语音速记 / ✓ 标为已读</div>';
     list.forEach(function (p) {
       var opens = openEvents(p);
+      var unread = unreadEvents(p);
       var meta = [];
       if (p.admittedAt) meta.push('入院 ' + fmtDT(p.admittedAt));
       if (p.surgeryDate) meta.push('手术 ' + fmtDT(p.surgeryDate));
       if (p.herbs && p.herbs.length) meta.push('中药 ' + fmtDT(p.herbs[p.herbs.length - 1].at));
-      h += '<div class="card pcard" data-act="open" data-id="' + p.id + '">' +
+      h += '<div class="swipe-wrap" data-id="' + p.id + '">' +
+        '<div class="swipe-actions">' +
+        '<button class="sw-voice" data-act="quick-voice" data-id="' + p.id + '"><span class="si">🎤</span>语音</button>' +
+        '<button class="sw-read" data-act="mark-read" data-id="' + p.id + '"><span class="si">✓</span>已读</button>' +
+        '</div>' +
+        '<div class="card pcard" data-act="open" data-id="' + p.id + '">' +
         bedBox(p) +
         '<div class="pbody">' +
           '<div class="line1"><span class="pname">' + esc(p.name || '未命名') + '</span>' +
             ((p.sex || p.age) ? '<span class="chip sm">' + esc(p.sex || '') + (p.age ? (p.sex ? ' ' : '') + esc(p.age) + '岁' : '') + '</span>' : '') +
-            (opens.length ? '<span class="count">' + opens.length + '</span>' : '') +
+            (unread.length ? '<span class="count">' + unread.length + '</span>' : '') +
+            (opens.length && !unread.length ? '<span class="chip ok sm">已读</span>' : '') +
           '</div>' +
           (p.diagnosis ? '<div class="pdiag">' + esc(p.diagnosis) + '</div>' : '') +
           (meta.length ? '<div class="pmeta"><b>' + esc(meta.join(' · ')) + '</b></div>' : '') +
-        '</div></div>';
+        '</div></div></div>';
     });
     h += '<button class="btn primary block addbtn" data-act="add-patient" style="margin-top:6px">＋ 添加患者</button>';
     return h;
@@ -832,6 +951,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
           '<button class="btn sm" data-act="plan" data-id="' + e.id + '">记录处理</button>' +
           '<button class="btn sm" data-act="follow" data-id="' + e.id + '">添加追踪</button>' +
           '<button class="btn sm" data-act="edit-event" data-id="' + e.id + '">编辑</button>' +
+          (e.readAt ? '' : '<button class="btn sm" data-act="read-event" data-id="' + e.id + '">标为已读</button>') +
           '<button class="btn sm danger" data-act="del-event" data-id="' + e.id + '">删除</button>' +
         '</div></div>';
     });
@@ -1027,6 +1147,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 
   function sheetEvent(p, e) {
     var isNew = !e;
+    voiceKind = 'event';
     var d = e || {
       kind: '异常检查结果', foundAt: nowLocalInput(), content: '',
       status: '未处理', nextCheckAt: '', plan: '', planAt: ''
@@ -1035,6 +1156,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       title: isNew ? '记录异常结果 / 术后检查' : '编辑这条记录',
       okText: '保存',
       body:
+        voiceBoxHtml('例：今天早上血常规白细胞12.3升高，处理是加用抗生素，三天后复查') +
         field('类型', selectInput('kind', d.kind, EVENT_KINDS)) +
         field('发现时间（结果回报时间）', textInput('foundAt', d.foundAt, '', 'datetime-local')) +
         field('异常/检查结果内容', areaInput('content', d.content, '如 血常规 WBC 12.3↑，中性粒细胞比例升高')) +
@@ -1067,10 +1189,12 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   }
 
   function sheetPlan(p, e) {
+    voiceKind = 'plan';
     openSheet({
       title: '记录处理',
       okText: '保存',
       body:
+        voiceBoxHtml('例：加用头孢呋辛1.5克，每8小时一次静滴') +
         field('处理内容', areaInput('plan', e.plan, '如 加用抗生素、复查血常规、请会诊…')) +
         field('处理时间', textInput('planAt', e.planAt || nowLocalInput(), '', 'datetime-local')) +
         field('处理后状态', selectInput('status', e.status === '未处理' ? '已处理待复查' : e.status, STATUSES)) +
@@ -1085,10 +1209,12 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   }
 
   function sheetFollow(p, e) {
+    voiceKind = 'follow';
     openSheet({
       title: '添加追踪记录',
       okText: '保存',
       body:
+        voiceBoxHtml('例：今天复查血常规白细胞9.8，比之前下降，继续观察') +
         field('追踪时间', textInput('at', nowLocalInput(), '', 'datetime-local')) +
         field('追踪情况', areaInput('content', '', '如 复查血常规 WBC 9.8，较前下降，继续观察')) +
         field('追踪后状态', selectInput('status', '已复查未解除', STATUSES)) +
@@ -1110,10 +1236,12 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       herb: { title: item ? '编辑中药记录' : '中药开立', lbl: '中药内容', ph: '如 桃红四物汤加减 7剂，水煎分服' },
       note: { title: item ? '编辑记录' : '添加其他记录', lbl: '内容', ph: '如 今日换药，切口无红肿渗出' }
     }[kind];
+    voiceKind = kind === 'herb' ? 'herb' : 'note';
     openSheet({
       title: cfg.title,
       okText: '保存',
       body:
+        voiceBoxHtml(kind === 'herb' ? '例：桃红四物汤加减7剂，水煎分服' : '例：今天换药，切口没有红肿渗出') +
         field(kind === 'herb' ? '开立时间' : '时间', textInput('at', (item && item.at) || nowLocalInput(), '', 'datetime-local')) +
         field(cfg.lbl, areaInput('content', item ? item.content : '', cfg.ph)) +
         '<div style="height:8px"></div>',
@@ -1165,22 +1293,14 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       '</div>';
 
     h += '<div class="setgrp">' +
+      setRow('postop-days', '📅', '术后关注天数', '现在是第 ' + postopDays().join('、') + ' 天自动进待办') +
+      '</div>';
+    h += '<div class="setgrp">' +
       setRow('selftest', '🧪', '运行自检', '检查排序、待办规则、存储是否正常') +
       setRow('clear-all', '🗑️', '清空全部数据', '不可恢复，请先导出备份') +
       '</div>';
 
     var ai = loadAi();
-    h += '<div class="section-title">识别引擎</div><div class="setgrp">' +
-      setRow('engine-mode', '⚙️', '识别引擎',
-        engineMode() === 'paddle' ? 'PaddleOCR（中文更强·需联网试用）' : '内置 Tesseract（完全离线）') +
-      setRow('paddle-url', '🔗', 'PaddleOCR 脚本地址',
-        paddleUrl() === PADDLE_DEFAULT ? '默认（从网络加载）' : paddleUrl()) +
-      '<div class="setrow" style="display:block;cursor:default"><div class="hint" style="line-height:1.7;padding:4px 0">' +
-      'PaddleOCR 是专门做中文的识别引擎，模型比内置的小 8 倍、理论上更准。它需要联网加载脚本，' +
-      '并且依赖手机的图形能力——能不能跑起来得在你手机上试一次。<br>' +
-      '跑不起来的话，App 会自动切回内置引擎，不会影响使用。</div></div>' +
-      '</div>';
-
     h += '<div class="section-title">AI 识别（可选，默认关闭）</div><div class="setgrp">' +
       setRow('ai-mode', '🧠', '工作方式', AI_MODE_LABEL[ai.mode || 'off']) +
       setRow('ai-url', '🔗', '服务地址', ai.url || '未设置，点这里填写') +
@@ -1364,7 +1484,20 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       switch (act) {
         case 'tab':
           view.tab = el.dataset.tab; view.patientId = null; render(); window.scrollTo(0, 0); return;
-        case 'open': view.patientId = el.dataset.id; render(); $('view').scrollTop = 0; return;
+        case 'open':
+          if (el.dataset.swiped === '1') return;      /* 刚才是滑动，不当作点击 */
+          closeAllSwipes();
+          view.patientId = el.dataset.id; render(); $('view').scrollTop = 0; return;
+        case 'quick-voice': closeAllSwipes(); openQuickVoice(el.dataset.id); return;
+        case 'mark-read': {
+          closeAllSwipes();
+          var mp = getPatient(el.dataset.id);
+          if (!mp) return;
+          var n = markPatientRead(mp);
+          if (!n) { toast('这位患者没有待处理的提示'); return; }
+          save(); render(); toast('已标记为已读（' + n + ' 条）');
+          return;
+        }
         case 'back': view.patientId = null; render(); return;
         case 'settings': renderSettingsPage(); return;
         case 'add-patient': sheetPatient(null); return;
@@ -1406,6 +1539,12 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
               p.events = p.events.filter(function (x) { return x.id !== e4.id; });
               save(); render(); toast('已删除');
             });
+          return;
+        }
+        case 'read-event': {
+          var e6 = findEvent(p, el.dataset.id); if (!e6) return;
+          e6.readAt = nowLocalInput();
+          save(); render(); toast('已标记已读');
           return;
         }
         case 'del-follow': {
@@ -1477,6 +1616,22 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         case 'export-json': exportJson(); return;
         case 'import-json': importJson(); return;
         case 'selftest': location.search = '?selftest=1'; return;
+        case 'postop-days': {
+          openSheet({
+            title: '术后关注天数',
+            okText: '保存',
+            body: field('在第几天自动进「待办」',
+              textInput('v', postopDays().join(','), '例如 1,3,7,14'),
+              '用逗号分开。改了以后，只有这些天数的术后患者会自动出现在待办页') + '<div style="height:8px"></div>',
+            onSave: function (v) {
+              var arr = setPostopDaysText(v.v);
+              if (!arr) { toast('至少填一个天数，比如 1,3,7,14'); return false; }
+              renderSettingsPage();
+              toast('已保存：第 ' + arr.join('、') + ' 天');
+            }
+          });
+          return;
+        }
         case 'ai-url': case 'ai-key': case 'ai-model': {
           var meta = {
             'ai-url': { t: 'AI 服务地址', k: 'url', ph: 'https://…/v1/chat/completions', hint: '要填到 chat/completions 这一层（OpenAI 兼容接口）' },
@@ -1513,46 +1668,6 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
             saveAi(cfg);
             renderSettingsPage();
             toast('已开启：' + AI_MODE_LABEL[next]);
-          });
-          return;
-        }
-        case 'engine-mode': {
-          if (engineMode() === 'paddle') {
-            setEngine('builtin');
-            paddleFailed = false;
-            renderSettingsPage();
-            toast('已切回内置引擎');
-            return;
-          }
-          askConfirm({
-            title: '试用 PaddleOCR 引擎',
-            msg: 'PaddleOCR 是中文识别专用引擎，模型更小、理论上更准。\n\n' +
-              '但它需要联网加载脚本，而且依赖手机的图形能力，能不能在你的手机上跑起来要试一次。\n\n' +
-              '如果跑不起来，App 会自动切回内置引擎，不会有任何损失。',
-            okText: '知道了，试用'
-          }).then(function (yes) {
-            if (!yes) return;
-            setEngine('paddle');
-            paddleFailed = false;
-            renderSettingsPage();
-            toast('已切换，去识别一张图试试');
-          });
-          return;
-        }
-        case 'paddle-url': {
-          openSheet({
-            title: 'PaddleOCR 脚本地址',
-            okText: '保存',
-            body: field('脚本地址', textInput('v', paddleUrl(), PADDLE_DEFAULT),
-              '默认从网络加载；以后打包成离线版时改成本机路径') + '<div style="height:8px"></div>',
-            onSave: function (v) {
-              try {
-                var u = String(v.v || '').trim();
-                localStorage.setItem(PADDLE_URL_KEY, u || PADDLE_DEFAULT);
-              } catch (e) { }
-              renderSettingsPage();
-              toast('已保存');
-            }
           });
           return;
         }
@@ -1807,6 +1922,56 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
         if (rs[0].diagnosis.indexOf('股骨颈骨折') < 0) return '第1条诊断没解析出来：' + rs[0].diagnosis;
         return true;
       });
+      chk('语音解析：一句话抠出时间/内容/处理/复查', function () {
+        var v = parseUtterance('今天早上血常规白细胞12.3升高，处理是加用抗生素，三天后复查', 'event');
+        if (v.at.indexOf(todayStr() + 'T08:00') !== 0) return '时间不对：' + v.at;
+        if (v.content !== '血常规白细胞12.3升高') return '内容不对：' + v.content;
+        if (v.plan !== '加用抗生素') return '处理不对：' + v.plan;
+        var d3 = new Date(); d3.setDate(d3.getDate() + 3);
+        var want = d3.getFullYear() + '-' + pad2(d3.getMonth() + 1) + '-' + pad2(d3.getDate());
+        if (v.next !== want) return '复查日期不对：' + v.next;
+        return true;
+      });
+      chk('语音解析：自动判断这句话属于哪一类', function () {
+        if (classifyUtterance('今天开了桃红四物汤7剂') !== 'herb') return '中药没认出来';
+        if (classifyUtterance('复查血常规白细胞9.8') !== 'event') return '检查没认出来';
+        if (classifyUtterance('加用头孢呋辛静滴') !== 'plan') return '处理没认出来';
+        if (classifyUtterance('今天换药，切口没有红肿渗出') !== 'note') return '其他记录没认出来';
+        if (classifyUtterance('昨天下午拍了术后复查片子，位置良好') !== 'event2') return '术后检查没认出来';
+        return true;
+      });
+      chk('语音解析：口语日期与追踪状态', function () {
+        var v = parseUtterance('昨天下午3点复查了血常规，白细胞9.8', 'follow');
+        var y = new Date(); y.setDate(y.getDate() - 1);
+        var want = y.getFullYear() + '-' + pad2(y.getMonth() + 1) + '-' + pad2(y.getDate()) + 'T15:00';
+        if (v.at !== want) return '时间不对：' + v.at;
+        if (v.status !== '已复查未解除') return '状态不对：' + v.status;
+        return true;
+      });
+      chk('术后关注天数可自行设定', function () {
+        var old = postopDays().join(',');
+        var arr = setPostopDaysText('2,5,10');
+        var ok = arr && arr.join(',') === '2,5,10' && postopDays().join(',') === '2,5,10';
+        setPostopDaysText(old);
+        if (!ok) return '设置或读取失败';
+        return postopDays().join(',') === old ? true : '恢复默认失败';
+      });
+      chk('未读红圈：标为已读后消失', function () {
+        state.patients = normalize({
+          patients: [{
+            bed: '9', name: '测试丙', sex: '男', events: [
+              { kind: '异常检查结果', foundAt: todayStr() + 'T08:00', content: 'WBC 升高', status: '未处理' }
+            ]
+          }]
+        }).patients;
+        var p9 = state.patients[0];
+        if (unreadEvents(p9).length !== 1) return '初始未读数不对';
+        var n = markPatientRead(p9);
+        if (n !== 1) return '标记条数不对：' + n;
+        if (unreadEvents(p9).length !== 0) return '标记后仍未读';
+        if (!p9.events[0].readAt) return '没写已读时间';
+        return true;
+      });
       chk('没有"点了没反应"的按钮', function () {
         /* 每次改界面后自动核对：页面上出现的每个按钮，都必须有对应的功能 */
         var handled = ['tab', 'open', 'back', 'settings', 'add-patient', 'import-ocr', 'edit-patient',
@@ -1815,7 +1980,8 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
           'sheet-close', 'sheet-save', 'export-excel', 'export-json', 'import-json',
           'selftest', 'clear-all', 'restore-snap',
           'ai-mode', 'ai-url', 'ai-key', 'ai-model',
-          'engine-mode', 'paddle-url', 'sheet-save-next', 'fill-diag'];
+          'sheet-save-next', 'fill-diag', 'postop-days', 'read-event',
+          'quick-voice', 'mark-read', 'vb-fill', 'qv-parse', 'qv-manual'];
         var html = renderTodo() + renderWard() + renderArchive() +
           (state.patients[0] ? renderPatient(state.patients[0]) : '') + renderSettings();
         var re = /data-act="([^"]+)"/g, m, missing = [], seen = {};
@@ -1862,6 +2028,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }
     bind();
     initImport();
+    initVoice();
     render();
     maybeSnapshot();
     registerSW();
@@ -1881,9 +2048,6 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   var OCR_MODE_KEY = 'wardround.ocrMode';
   var AI_KEY = 'wardround.ai';
   var ENGINE_KEY = 'wardround.engine';
-  var PADDLE_URL_KEY = 'wardround.paddleUrl';
-  var PADDLE_DEFAULT = 'https://cdn.jsdelivr.net/npm/@paddlejs-models/ocr@1.2.4/lib/index.js';
-  var paddleFailed = false;
   var CAMERA_FLAG = 'wardround.cameraPending';
   var ocrWorker = null;
   var imp = null;
@@ -2067,7 +2231,12 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
           var longest = Math.max(w0, h0);
           var base = longest >= 1200 ? 2 : 1.5;
           var scale = mode === 'raw' ? Math.min(base, 2600 / longest) : Math.min(base, 3600 / longest);
-          if (scale < 1) scale = 1;
+          /* 内存保护：处理后的总像素数封顶，避免大照片（一千多万像素）
+             把画布撑到上百 MB，把手机上的页面搞崩。 */
+          var MAXPX = 9000000;
+          var px = (w0 * scale) * (h0 * scale);
+          if (px > MAXPX) scale *= Math.sqrt(MAXPX / px);
+          if (scale < 0.3) scale = 0.3;
           var w = Math.max(1, Math.round(w0 * scale));
           var h = Math.max(1, Math.round(h0 * scale));
           var c = document.createElement('canvas');
@@ -2076,6 +2245,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
           ctx.imageSmoothingEnabled = true;
           ctx.imageSmoothingQuality = 'high';
           ctx.drawImage(img, 0, 0, w, h);
+          img.src = '';              /* 尽早释放原图占的内存 */
 
           if (mode !== 'raw') {
             var d = ctx.getImageData(0, 0, w, h);
@@ -2480,28 +2650,11 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     }]).then(function (t) { return mapAiRecords(pickJson(t)); });
   }
 
-  /* ============================================================
-     PaddleOCR 引擎（可选，联网试用）
-     PaddleOCR 是专门做中文的识别引擎，模型只有 1.3MB（比内置的小 8 倍）。
-     它依赖 WebGL，运行环境差异较大，所以先做成"能跑就用、跑不了自动退回内置引擎"。
-     ============================================================ */
-
-  function engineMode() {
-    try { return localStorage.getItem(ENGINE_KEY) || 'builtin'; } catch (e) { return 'builtin'; }
-  }
-  function setEngine(v) { try { localStorage.setItem(ENGINE_KEY, v); } catch (e) { } }
-  function paddleUrl() {
-    try { return localStorage.getItem(PADDLE_URL_KEY) || PADDLE_DEFAULT; } catch (e) { return PADDLE_DEFAULT; }
-  }
-
-  function loadScriptOnce(src) {
-    return new Promise(function (res, rej) {
-      var s = document.createElement('script');
-      s.src = src;
-      s.onload = function () { res(); };
-      s.onerror = function () { rej(new Error('脚本加载失败')); };
-      document.head.appendChild(s);
-    });
+  /* PaddleOCR 已于 v1.0.8 撤除：
+     它在 iPhone 上会申请大量显存，直接把网页搞崩（iPhone 会提示"重复出现问题"）。
+     这里只做一件事：把用户之前存下的引擎设置清掉，确保一律走内置引擎。 */
+  function resetEngineSetting() {
+    try { localStorage.removeItem(ENGINE_KEY); } catch (e) { }
   }
 
   /* 给任何一步加超时：卡住就当作失败，好让程序自动退回内置引擎 */
@@ -2516,47 +2669,6 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     });
   }
 
-  /* PaddleOCR 自带预处理，这里只做尺寸控制 */
-  function fileToPlainCanvas(file, maxSide) {
-    return new Promise(function (res, rej) {
-      var url = URL.createObjectURL(file);
-      var img = new Image();
-      img.onload = function () {
-        try {
-          var w0 = img.naturalWidth, h0 = img.naturalHeight;
-          var s = Math.min(1, maxSide / Math.max(w0, h0));
-          if (s < 0.5) s = 0.5;                       /* 太大时最多缩一半 */
-          var c = document.createElement('canvas');
-          c.width = Math.max(1, Math.round(w0 * s));
-          c.height = Math.max(1, Math.round(h0 * s));
-          var ctx = c.getContext('2d');
-          ctx.drawImage(img, 0, 0, c.width, c.height);
-          URL.revokeObjectURL(url);
-          res(c);
-        } catch (e) { URL.revokeObjectURL(url); rej(e); }
-      };
-      img.onerror = function () { URL.revokeObjectURL(url); rej(new Error('图片打不开')); };
-      img.src = url;
-    });
-  }
-
-  function paddleRecognize(file, onStage) {
-    var say = function (m) { if (onStage) onStage(m); };
-    say('正在加载 PaddleOCR 引擎（需联网）…');
-    return loadScriptOnce(paddleUrl()).then(function () {
-      if (!window.paddlejs || !window.paddlejs.ocr) throw new Error('引擎没有正确加载');
-      say('正在初始化 PaddleOCR…');
-      return window.paddlejs.ocr.init();
-    }).then(function () {
-      return fileToPlainCanvas(file, 2000);
-    }).then(function (canvas) {
-      say('PaddleOCR 正在识别文字…');
-      return window.paddlejs.ocr.recognize(canvas);
-    }).then(function (res) {
-      var lines = (res && res.text) || [];
-      return lines.join('\n');
-    });
-  }
 
   /* ---------------- 导入界面 ---------------- */
 
@@ -2774,33 +2886,6 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
       return;
     }
 
-    /* 可选引擎：PaddleOCR（中文识别专用，联网试用；跑不了就自动退回内置引擎） */
-    if (tryDepth === 0 && !paddleFailed && engineMode() === 'paddle') {
-      imp.stage = 'busy';
-      imp.msg = '正在用 PaddleOCR 识别…';
-      imp.pct = 0.2;
-      refreshImport();
-      withTimeout(paddleRecognize(file, function (m) { if (imp) { imp.msg = m; refreshImport(); } }),
-        45000, 'PaddleOCR 超时')
-        .then(function (text) {
-          if (!imp) return;
-          if (!text || !text.trim()) throw new Error('没有识别到文字');
-          imp.raw = text;
-          imp.rawAll = imp.rawAll || [];
-          imp.rawAll.push({ mode: 'PaddleOCR', text: text });
-          var rs = parseHisText(text);
-          if (!rs.length) throw new Error('没有解析出患者');
-          showPreview(rs);
-        })
-        .catch(function (e) {
-          if (!imp) return;
-          paddleFailed = true;                    /* 本次运行不再重试，避免反复卡住 */
-          toast('PaddleOCR 不可用，已切回内置引擎');
-          return startRecognize(file, 0, skipAi);
-        });
-      return;
-    }
-
     imp.stage = 'busy';
     imp.msg = tryDepth ? ('改用「' + modeName(ocrMode) + '」再试一次…') : '正在识别…';
     imp.pct = 0.05;
@@ -2933,6 +3018,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   }
 
   function initImport() {
+    resetEngineSetting();   /* 老版本留下的引擎设置一并清掉，确保走内置引擎 */
     document.addEventListener('click', function (ev) {
       var el = findAction(ev.target);
       if (!el) return;
@@ -3041,6 +3127,356 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     aiMode: aiMode,
     loadAi: loadAi
   };
+
+
+    /* ============================================================
+     语音 / 口语智能识别
+     把"一句人话"解析成结构化字段，用于所有录入场景。
+     语音转文字由手机键盘自带的麦克风完成，这里只负责理解内容。
+     ============================================================ */
+
+  var POSTOP_KEY = 'wardround.postopDays';
+
+  function postopDays() {
+    try {
+      var v = JSON.parse(localStorage.getItem(POSTOP_KEY));
+      if (v && v.length) return v;
+    } catch (e) { }
+    return [1, 3, 7, 14];
+  }
+  function setPostopDaysText(s) {
+    var arr = String(s || '').split(/[^\d]+/).map(function (x) { return parseInt(x, 10); })
+      .filter(function (x) { return x > 0 && x < 365; });
+    arr = arr.filter(function (x, i) { return arr.indexOf(x) === i; }).sort(function (a, b) { return a - b; });
+    if (!arr.length) return false;
+    try { localStorage.setItem(POSTOP_KEY, JSON.stringify(arr)); } catch (e) { }
+    return arr;
+  }
+
+  /* ---------- 中文数字 ---------- */
+  function cnNum(s) {
+    if (s === null || s === undefined) return NaN;
+    s = String(s).trim();
+    if (/^\d+$/.test(s)) return parseInt(s, 10);
+    var map = { '零': 0, '一': 1, '两': 2, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9 };
+    if (s === '十') return 10;
+    var m = s.match(/^十(.)$/); if (m && map[m[1]] !== undefined) return 10 + map[m[1]];
+    m = s.match(/^(.)十(.)?$/);
+    if (m && map[m[1]] !== undefined) return map[m[1]] * 10 + (m[2] ? (map[m[2]] || 0) : 0);
+    return map[s] !== undefined ? map[s] : NaN;
+  }
+  function dstr(d) { return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
+  function dtstr(d, hh, mm) { return dstr(d) + 'T' + pad2(hh) + ':' + pad2(mm); }
+
+  /* ---------- 从一句话里抠出时间 ---------- */
+  function extractWhen(t) {
+    var now = new Date(), base = null, hh = null, mm = 0, period = 0;
+    if (/前天/.test(t)) base = new Date(now.getTime() - 2 * 86400000);
+    else if (/昨天|昨日/.test(t)) base = new Date(now.getTime() - 86400000);
+    else if (/今天|今日|刚才|刚刚|现在/.test(t)) base = new Date(now.getTime());
+    var m = t.match(/(\d{1,2})月(\d{1,2})[日号]/);
+    if (m) base = new Date(now.getFullYear(), +m[1] - 1, +m[2]);
+    if (!base) {
+      m = t.match(/(\d{1,2})[日号]/);
+      if (m) base = new Date(now.getFullYear(), now.getMonth(), +m[1]);
+    }
+    if (/早上|上午|早晨/.test(t)) period = 1;
+    else if (/中午/.test(t)) period = 2;
+    else if (/下午/.test(t)) period = 3;
+    else if (/晚上|夜里|傍晚/.test(t)) period = 4;
+    m = t.match(/(\d{1,2})\s*[点时](?:(\d{1,2})\s*分?|半)?/);
+    if (m) { hh = +m[1]; mm = m[2] ? +m[2] : (/半/.test(m[0]) ? 30 : 0); }
+    if (hh !== null) {
+      /* "下午3点"要说成 15 点，而不是凌晨 3 点 */
+      if ((period === 3 || period === 4) && hh < 12) hh += 12;
+      if (period === 1 && hh === 12) hh = 0;
+    } else if (period) {
+      hh = [8, 12, 15, 20][period - 1];
+    }
+    if (!base && hh === null) return '';
+    if (!base) base = now;
+    if (hh === null) hh = now.getHours();
+    return dtstr(base, hh % 24, mm % 60);
+  }
+
+  /* ---------- 追踪状态 ---------- */
+  function extractStatus(t) {
+    if (/已解除|解除了|已经解除|恢复正常|恢复正常了|好了|没事了|缓解了/.test(t)) return '已解除';
+    if (/长期随访|随访中|随访观察/.test(t)) return '长期随访';
+    if (/已复查|复查了|复查过|复测了/.test(t)) return '已复查未解除';
+    if (/已处理|处理了|已经处理|给过|用上药|加上了|已用药/.test(t)) return '已处理待复查';
+    return '';
+  }
+
+  /* ---------- 计划复查日期 ---------- */
+  function extractNext(t) {
+    var now = new Date(), d = null;
+    var m = t.match(/([一二三四五六七八九十两\d]+)\s*天\s*(?:后|之后)?[^。；;,，]{0,4}复查/);
+    if (m) { var n = cnNum(m[1]); if (!isNaN(n) && n > 0 && n < 400) d = new Date(now.getTime() + n * 86400000); }
+    if (!d && /明天[^。；;,，]{0,4}复查/.test(t)) d = new Date(now.getTime() + 86400000);
+    if (!d && /后天[^。；;,，]{0,4}复查/.test(t)) d = new Date(now.getTime() + 2 * 86400000);
+    if (!d) {
+      var M = t.match(/(\d{1,2})月(\d{1,2})[日号][^。；;,，]{0,6}复查/);
+      if (M) d = new Date(now.getFullYear(), +M[1] - 1, +M[2]);
+    }
+    return d ? dstr(d) : '';
+  }
+
+  /* ---------- 处理内容 ---------- */
+  var PLAN_HEAD = /^(处理方案|处理|给予|予以|加用|改用|停用|换用|开了|开药|开了药|换药|拔管|上药|用药|嘱|建议|考虑)/;
+  var PLAN_IN = /(处理方案|处理是|处理为|给予|予以|加用|改用|停用|换用)/;
+  /* 只去掉"处理是/给予"这类标签词，动作词（加用、改用…）要保留 */
+  var PLAN_STRIP = /^(处理方案|处理|给予|予以)\s*(是|为|：|:)?\s*/;
+
+  function splitClauses(t) {
+    return String(t || '').split(/[，,。；;！!\n]/).map(function (s) { return s.trim(); }).filter(Boolean);
+  }
+
+  function cleanContent(s) {
+    return String(s || '')
+      .replace(/^(今天|今日|昨天|昨日|前天|刚才|刚刚|现在)\s*/, '')
+      .replace(/^(早上|上午|早晨|中午|下午|晚上|夜里|傍晚)\s*/, '')
+      .replace(/^\d{1,2}\s*[点时](半|\d{1,2}\s*分?)?\s*/, '')
+      .replace(/^\d{1,2}月\d{1,2}[日号]\s*/, '')
+      .replace(/^(复查|检查)结果?[是为：:]\s*/, '')
+      .replace(/\s+/g, '')
+      .trim();
+  }
+
+  /* ---------- 主解析 ----------
+     kind: event(异常/术后) / plan(处理) / follow(追踪) / herb(中药) / note(其他) */
+  function parseUtterance(text, kind) {
+    var t = String(text || '').replace(/\s+/g, ' ').trim();
+    var out = { at: extractWhen(t), status: extractStatus(t), next: extractNext(t), content: '', plan: '' };
+    if (!t) return out;
+
+    if (kind === 'plan') {
+      out.plan = cleanContent(t).replace(PLAN_STRIP, '').trim();
+      return out;
+    }
+    if (kind === 'follow' || kind === 'herb' || kind === 'note') {
+      out.content = cleanContent(t);
+      return out;
+    }
+    /* event：把"处理"那一句拆出来，剩下的当检查结果 */
+    var clauses = splitClauses(t), main = [], plan = [];
+    clauses.forEach(function (c) {
+      if (PLAN_HEAD.test(c)) plan.push(c.replace(PLAN_STRIP, '').replace(/^[是为：:，,]?\s*/, ''));
+      else if (/复查|复测|随访/.test(c) && c.length <= 10) { /* 只是计划复查，不当作内容 */ }
+      else main.push(c.replace(PLAN_IN, '，处理是').replace(/^.*?处理是/, ''));
+    });
+    /* 如果整句里有"处理"关键词但没被拆开，再补一刀 */
+    if (!plan.length && PLAN_IN.test(t)) {
+      var idx = t.search(PLAN_IN);
+      main = [t.slice(0, idx)];
+      plan = [t.slice(idx).replace(PLAN_STRIP, '').replace(/^[是为：:，,]?\s*/, '')];
+    }
+    out.content = cleanContent(main.join('；'));
+    out.plan = cleanContent(plan.join('；'));
+    return out;
+  }
+
+  /* ---------- 判断这句话该归到哪一类 ---------- */
+  function classifyUtterance(t) {
+    var s = String(t || '');
+    if (/中药|汤剂|汤药|方剂|饮片|煎服|冲服|中成药/.test(s) || /[\u4e00-\u9fa5]{2,}汤/.test(s)) return 'herb';
+    if (/术后/.test(s) && /(复查|检查|片子|拍片|ct|核磁|x线|b超)/i.test(s)) return 'event2';
+    if (/(复查|检查|化验|血常规|生化|电解质|肝功|肾功|凝血|培养|ct|核磁|x线|b超|彩超|指标|结果|阳性|升高|降低|偏高|偏低)/i.test(s)) return 'event';
+    if (PLAN_IN.test(s) || PLAN_HEAD.test(s)) return 'plan';
+    return 'note';
+  }
+
+  /* ---------- 把解析结果填进当前表单 ---------- */
+  function voiceSetField(name, val) {
+    if (!val) return;
+    var el = document.querySelector('#sheetBody [name=' + name + ']');
+    if (el) el.value = val;
+  }
+
+  function applyVoiceToSheet(v, kind) {
+    if (kind === 'event' || kind === 'event2') {
+      voiceSetField('kind', kind === 'event2' ? '术后检查' : '异常检查结果');
+      voiceSetField('foundAt', v.at);
+      voiceSetField('content', v.content);
+      voiceSetField('status', v.status);
+      voiceSetField('nextCheckAt', v.next);
+      voiceSetField('plan', v.plan);
+      if (v.plan) voiceSetField('planAt', v.at);
+    } else if (kind === 'plan') {
+      voiceSetField('plan', v.plan || v.content);
+      voiceSetField('planAt', v.at);
+      if (v.status) voiceSetField('status', v.status);
+    } else if (kind === 'follow') {
+      voiceSetField('at', v.at);
+      voiceSetField('content', v.content);
+      if (v.status) voiceSetField('status', v.status);
+    } else {
+      voiceSetField('at', v.at);
+      voiceSetField('content', v.content);
+    }
+  }
+
+  /* ---------- 语音输入框（放在各个表单顶部） ---------- */
+  var voiceKind = 'note';
+  function voiceBoxHtml(hint) {
+    return '<div class="voicebox">' +
+      '<div class="vb-hd">🎤 语音填写（点下面的框，用键盘上的麦克风说）</div>' +
+      '<textarea id="vbInput" placeholder="' + esc(hint || '') + '"></textarea>' +
+      '<button type="button" class="btn sm" data-act="vb-fill" style="margin-top:8px">识别并填入下面的表单</button>' +
+      '<div class="voice-tip">例：今天早上血常规白细胞12.3升高，处理是加用抗生素，三天后复查</div>' +
+      '</div>';
+  }
+
+  /* ============================================================
+     左滑进来的"快速语音记录"
+     说一句话 → 自动判断类别 → 确认 → 存进对应的信息栏
+     ============================================================ */
+  var qv = null;
+
+  function openQuickVoice(patientId) {
+    var p = getPatient(patientId);
+    if (!p) return;
+    qv = { pid: patientId, stage: 'input', text: '', kind: '', parsed: null };
+    renderQuickVoice();
+  }
+
+  function renderQuickVoice() {
+    var p = getPatient(qv.pid);
+    if (!p) { closeSheet(false); return; }
+    var title = '快速记录 · ' + (p.bed ? p.bed + '床 ' : '') + (p.name || '');
+    if (qv.stage === 'input') {
+      openSheet({
+        title: title,
+        hideOk: true,
+        body:
+          '<div class="voicebox">' +
+          '<div class="vb-hd">🎤 说一句话，自动归类</div>' +
+          '<textarea id="qvInput" style="min-height:96px" placeholder="例：今天早上血常规白细胞12.3升高，加用抗生素，三天后复查"></textarea>' +
+          '<div class="voice-tip">点框 → 麦克风说话 → 点下面的按钮。<br>' +
+          '程序会自动判断这是"异常结果 / 术后检查 / 中药 / 处理 / 其他记录"，并抠出时间、状态、复查日期。</div>' +
+          '</div>' +
+          '<button class="btn primary block" data-act="qv-parse">识别这句话</button>' +
+          '<button class="btn block" data-act="qv-manual" style="margin-top:8px">不用语音，打开完整表单</button>',
+        onCancel: function () { qv = null; }
+      });
+      return;
+    }
+    /* 确认识别结果 */
+    var kinds = [['event', '异常检查结果'], ['event2', '术后检查'], ['herb', '中药开立'],
+                 ['plan', '处理（记到未闭环那一条）'], ['note', '其他记录'], ['follow', '追踪记录']];
+    var v = qv.parsed;
+    var body = '<div class="hint" style="margin-bottom:8px">识别结果如下，确认或修改后保存：</div>' +
+      '<div class="ai-result">' +
+      '<div class="row"><span class="k">归类</span><select id="qvKind">' +
+      kinds.map(function (k) { return '<option value="' + k[0] + '"' + (k[0] === qv.kind ? ' selected' : '') + '>' + k[1] + '</option>'; }).join('') +
+      '</select></div>' +
+      '<div class="row"><span class="k">时间</span><input type="datetime-local" id="qvAt" value="' + esc(v.at || nowLocalInput()) + '"></div>' +
+      '<div class="row" style="align-items:flex-start"><span class="k">内容</span><textarea id="qvContent" style="min-height:70px">' + esc(v.content || '') + '</textarea></div>' +
+      (v.plan ? '<div class="row" style="align-items:flex-start"><span class="k">处理</span><textarea id="qvPlan" style="min-height:56px">' + esc(v.plan) + '</textarea></div>' : '') +
+      (v.next ? '<div class="row"><span class="k">复查</span><input type="date" id="qvNext" value="' + esc(v.next) + '"></div>' : '') +
+      (v.status ? '<div class="row"><span class="k">状态</span><input id="qvStatus" value="' + esc(v.status) + '"></div>' : '') +
+      '</div>';
+    openSheet({
+      title: title + ' · 确认',
+      okText: '保存',
+      body: body,
+      onSave: function () { return saveQuickVoice(); },
+      onCancel: function () { qv = null; }
+    });
+  }
+
+  function saveQuickVoice() {
+    var p = getPatient(qv.pid);
+    if (!p) return false;
+    var kind = (document.getElementById('qvKind') || {}).value || qv.kind;
+    var at = (document.getElementById('qvAt') || {}).value || nowLocalInput();
+    var content = ((document.getElementById('qvContent') || {}).value || '').trim();
+    var plan = ((document.getElementById('qvPlan') || {}).value || '').trim();
+    var next = ((document.getElementById('qvNext') || {}).value || '').trim();
+    var status = ((document.getElementById('qvStatus') || {}).value || '').trim();
+    if (kind !== 'plan' && !content) { toast('内容不能为空'); return false; }
+    if (kind === 'plan' && !plan) { toast('处理内容不能为空'); return false; }
+
+    if (kind === 'herb') {
+      p.herbs = p.herbs || [];
+      p.herbs.push({ id: uid('h'), at: at, content: content });
+    } else if (kind === 'note') {
+      p.notes = p.notes || [];
+      p.notes.push({ id: uid('n'), at: at, content: content });
+    } else if (kind === 'follow') {
+      var ev = openEvents(p)[0] || (p.events || [])[0];
+      if (!ev) { toast('这位患者还没有可追踪的记录，先记一条异常结果吧'); return false; }
+      ev.followups = ev.followups || [];
+      ev.followups.push({ id: uid('f'), at: at, content: content });
+      if (status) { ev.status = status; if (status === '已解除' && !ev.closedAt) ev.closedAt = at; }
+      ev.readAt = '';
+    } else if (kind === 'plan') {
+      var ev2 = openEvents(p)[0];
+      if (!ev2) { toast('这位患者没有未闭环的记录，已按"其他记录"保存'); p.notes = p.notes || []; p.notes.push({ id: uid('n'), at: at, content: plan }); }
+      else {
+        ev2.plan = ev2.plan ? (ev2.plan + '；' + plan) : plan;
+        ev2.planAt = at;
+        if (status) { ev2.status = status; if (status === '已解除') ev2.closedAt = at; }
+        else if (ev2.status === '未处理') ev2.status = '已处理待复查';
+        ev2.readAt = '';
+      }
+    } else {
+      p.events = p.events || [];
+      p.events.push({
+        id: uid('e'), kind: kind === 'event2' ? '术后检查' : '异常检查结果',
+        foundAt: at, content: content, plan: plan, planAt: plan ? at : '',
+        status: status || (plan ? '已处理待复查' : '未处理'),
+        nextCheckAt: next, followups: [], closedAt: status === '已解除' ? at : '', readAt: ''
+      });
+    }
+    save();
+    var savedKind = kind;
+    qv = null;
+    closeSheet(false);
+    render();
+    toast('已记录到「' + ({ event: '异常结果', event2: '术后检查', herb: '中药开立', plan: '处理', note: '其他记录', follow: '追踪' })[savedKind] + '」');
+    return true;
+  }
+
+  function initVoice() {
+    document.addEventListener('click', function (ev) {
+      var el = findAction(ev.target);
+      if (!el) return;
+      var act = el.dataset.act;
+
+      if (act === 'vb-fill') {
+        var box = document.getElementById('vbInput');
+        var txt = box ? box.value : '';
+        if (!txt.trim()) { toast('请先说话或打字'); return; }
+        var v = parseUtterance(txt, voiceKind);
+        applyVoiceToSheet(v, voiceKind);
+        toast('已填入，检查一下再保存');
+        return;
+      }
+      if (act === 'quick-voice') { openQuickVoice(el.dataset.id); return; }
+      if (act === 'qv-parse') {
+        var qi = document.getElementById('qvInput');
+        var t = qi ? qi.value : '';
+        if (!t.trim()) { toast('请先说话或打字'); return; }
+        qv.text = t;
+        qv.parsed = parseUtterance(t, 'event');
+        qv.kind = classifyUtterance(t);
+        qv.stage = 'confirm';
+        renderQuickVoice();
+        return;
+      }
+      if (act === 'qv-manual') { sheetPatientDetailAdd(qv.pid); return; }
+    });
+  }
+
+  /* 从快速语音里点"打开完整表单" */
+  function sheetPatientDetailAdd(pid) {
+    var p = getPatient(pid);
+    if (!p) return;
+    qv = null;
+    closeSheet(false);
+    setTimeout(function () { view.patientId = pid; render(); sheetEvent(p, null); }, 260);
+  }
 
 
   /* 供自检/调试使用 */
